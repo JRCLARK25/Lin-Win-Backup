@@ -142,7 +142,7 @@ class BackupManager:
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Lin-Win-Backup: Cross-platform backup solution')
-    parser.add_argument('--type', choices=['full', 'incremental', 'restore'], required=True,
+    parser.add_argument('--type', choices=['full', 'incremental', 'restore', 'iso'], required=True,
                         help='Type of backup to perform')
     parser.add_argument('--destination', help='Backup destination directory (defaults to BACKUP_DIR from .env)')
     parser.add_argument('--backup', help='Backup to restore from (for restore type)')
@@ -346,50 +346,37 @@ def create_bootable_iso(backup_path, output_iso):
     return True
 
 def main():
-    """Main function"""
-    args = parse_arguments()
-    
-    # Configure logging
-    log_dir = DEFAULT_PATHS['log_dir']
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-    
-    logger.add(log_file, rotation="10 MB")
-    
-    # Check if we're using remote backup
-    if REMOTE_CONFIG['server_ip']:
-        remote = RemoteBackup()
-        if not remote.connect():
-            logger.error("Failed to connect to remote backup server")
-            return 1
-    
+    """Main function to handle backup operations"""
     try:
+        # Parse command line arguments
+        args = parse_arguments()
+        
+        # Set up logging
+        log_dir = DEFAULT_PATHS['log_dir']
+        log_file = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+        logger.add(log_file, rotation="1 day", retention="7 days")
+        
+        # Create backup manager
+        backup_manager = BackupManager(args.destination)
+        
+        # Handle different backup types
         if args.type == 'full':
-            backup_dir = create_full_backup(args.destination)
-            
-            if args.create_iso:
-                if not args.output_iso:
-                    args.output_iso = os.path.join(args.destination, f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.iso")
-                create_bootable_iso(backup_dir, args.output_iso)
-                
+            backup_manager.create_full_backup()
         elif args.type == 'incremental':
-            backup_dir = create_incremental_backup(args.destination)
-            
+            backup_manager.create_incremental_backup()
         elif args.type == 'restore':
-            if not args.backup:
-                logger.error("Backup path required for restore")
-                return 1
-            restore_from_backup(args.backup)
+            backup_manager.restore_from_backup(args.backup)
+        elif args.type == 'iso':
+            backup_manager.create_bootable_iso(args.output_iso)
+        else:
+            logger.error(f"Unknown backup type: {args.type}")
+            return 1
             
         return 0
         
     except Exception as e:
-        logger.error(f"Backup failed: {e}")
+        logger.error(f"Backup failed: {str(e)}")
         return 1
-        
-    finally:
-        if REMOTE_CONFIG['server_ip']:
-            remote.disconnect()
 
 if __name__ == "__main__":
     sys.exit(main()) 
