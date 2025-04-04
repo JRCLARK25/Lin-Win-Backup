@@ -54,6 +54,7 @@ class BackupManager:
     def _backup_linux_partition(self, partition, backup_dir):
         """Backup a Linux partition"""
         logger.info(f"Backing up Linux partition: {partition.mountpoint}")
+        print(f"Starting backup of partition: {partition.mountpoint}")
         
         # Create a directory for this partition in the backup
         partition_backup_dir = backup_dir / partition.mountpoint.replace('/', '_')
@@ -96,14 +97,32 @@ class BackupManager:
         all_exclude_dirs = linux_exclude_dirs + [p for p in EXCLUDE_PATTERNS if p.startswith('/')]
         all_exclude_files = linux_exclude_files + [p for p in EXCLUDE_PATTERNS if not p.startswith('/')]
         
+        # Count stats
+        files_processed = 0
+        files_skipped = 0
+        dirs_skipped = 0
+        total_size = 0
+        
+        # Status update interval (seconds)
+        status_interval = 5
+        last_status_time = time.time()
+        current_directory = ""
+        
         with tarfile.open(archive_path, 'w:gz') as tar:
             # Walk through the partition directory
             for root, dirs, files in os.walk(partition.mountpoint):
+                # Show current directory being processed (periodically)
+                if time.time() - last_status_time > status_interval:
+                    print(f"Processing: {root} | Files: {files_processed:,} processed, {files_skipped:,} skipped | Size: {total_size / (1024*1024):.2f} MB")
+                    last_status_time = time.time()
+                    
+                current_directory = root
+                
                 # Skip excluded directories - more robust check
                 should_skip = False
                 for exclude_dir in all_exclude_dirs:
                     if root.startswith(exclude_dir) or exclude_dir in root.split('/'):
-                        logger.debug(f"Skipping excluded directory: {root}")
+                        dirs_skipped += 1
                         should_skip = True
                         break
                 
@@ -112,7 +131,14 @@ class BackupManager:
                     dirs.clear()
                     continue
                 
-                for file in files:
+                # Show progress for directories with many files
+                if len(files) > 100:
+                    print(f"Found {len(files):,} files in {root}")
+                    file_progress = tqdm(files, desc=f"Processing {os.path.basename(root)}", leave=False)
+                else:
+                    file_progress = files
+                    
+                for file in file_progress:
                     file_path = os.path.join(root, file)
                     try:
                         # Skip excluded files based on patterns
@@ -126,12 +152,19 @@ class BackupManager:
                                 break
                         
                         if should_skip_file:
-                            logger.debug(f"Skipping excluded file: {file_path}")
+                            files_skipped += 1
                             continue
                         
                         # Check if we have read access before attempting to read the file
                         if not os.access(file_path, os.R_OK):
-                            logger.debug(f"Skipping file (no read permission): {file_path}")
+                            files_skipped += 1
+                            continue
+                            
+                        # Skip files larger than 4GB for now
+                        file_size = os.path.getsize(file_path)
+                        if file_size > 4 * 1024 * 1024 * 1024:
+                            print(f"Skipping large file (>4GB): {file_path}")
+                            files_skipped += 1
                             continue
                             
                         # Add file to archive
@@ -141,15 +174,28 @@ class BackupManager:
                         # Add to metadata
                         self.backup_metadata[arcname] = {
                             'path': file_path,
-                            'size': os.path.getsize(file_path),
+                            'size': file_size,
                             'mtime': os.path.getmtime(file_path)
                         }
+                        
+                        files_processed += 1
+                        total_size += file_size
+                        
                     except PermissionError:
-                        logger.debug(f"Permission denied: {file_path}")
+                        files_skipped += 1
                     except Exception as e:
                         logger.error(f"Error backing up {file_path}: {e}")
+                        files_skipped += 1
+        
+        # Print final summary
+        print(f"\nPartition backup completed: {partition.mountpoint}")
+        print(f"  ✓ Files processed: {files_processed:,}")
+        print(f"  ✓ Files skipped: {files_skipped:,}")
+        print(f"  ✓ Directories skipped: {dirs_skipped:,}")
+        print(f"  ✓ Total data backed up: {total_size / (1024*1024*1024):.2f} GB\n")
         
         logger.info(f"Completed backing up partition: {partition.mountpoint}")
+        logger.info(f"Files processed: {files_processed}, skipped: {files_skipped}, total size: {total_size / (1024*1024):.2f} MB")
         
     def _backup_windows_partition(self, partition, backup_dir):
         """Backup a Windows partition"""
