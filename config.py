@@ -62,6 +62,7 @@ ISO_CONFIG = {
 
 # Default paths
 DEFAULT_PATHS = {
+    'backup_dir': os.path.expanduser(os.getenv('BACKUP_DIR', '~/Lin-Win-Backup/backups')),
     'temp_dir': os.path.expanduser(os.getenv('LOCAL_TEMP_DIR', '~/Lin-Win-Backup/temp')),
     'log_dir': os.path.expanduser(os.getenv('LOG_DIR', '~/Lin-Win-Backup/logs'))
 }
