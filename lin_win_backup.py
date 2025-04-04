@@ -51,6 +51,51 @@ class BackupManager:
                     partitions.append(partition)
         return partitions
 
+    def _backup_linux_partition(self, partition, backup_dir):
+        """Backup a Linux partition"""
+        logger.info(f"Backing up Linux partition: {partition.mountpoint}")
+        
+        # Create a directory for this partition in the backup
+        partition_backup_dir = backup_dir / partition.mountpoint.replace('/', '_')
+        partition_backup_dir.mkdir(exist_ok=True)
+        
+        # Create a tar archive of the partition
+        archive_path = partition_backup_dir / f"{partition.mountpoint.replace('/', '_')}.tar.gz"
+        
+        with tarfile.open(archive_path, 'w:gz') as tar:
+            # Walk through the partition directory
+            for root, dirs, files in os.walk(partition.mountpoint):
+                # Skip excluded directories
+                if any(exclude in root for exclude in EXCLUDE_PATTERNS):
+                    continue
+                
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    try:
+                        # Skip excluded files
+                        if any(file.endswith(pattern.replace('*', '')) for pattern in EXCLUDE_PATTERNS):
+                            continue
+                        
+                        # Add file to archive
+                        arcname = os.path.relpath(file_path, partition.mountpoint)
+                        tar.add(file_path, arcname=arcname)
+                        
+                        # Add to metadata
+                        self.backup_metadata[arcname] = {
+                            'path': file_path,
+                            'size': os.path.getsize(file_path),
+                            'mtime': os.path.getmtime(file_path)
+                        }
+                    except Exception as e:
+                        logger.error(f"Error backing up {file_path}: {e}")
+        
+        logger.info(f"Completed backing up partition: {partition.mountpoint}")
+        
+    def _backup_windows_partition(self, partition, backup_dir):
+        """Backup a Windows partition"""
+        # This method would be implemented for Windows systems
+        pass
+
     def create_full_backup(self):
         """Create a full system backup"""
         logger.info("Starting full system backup")
@@ -62,7 +107,10 @@ class BackupManager:
         
         partitions = self.get_system_partitions()
         for partition in tqdm(partitions, desc="Backing up partitions"):
-            self._backup_partition(partition, backup_dir)
+            if self.system == "Linux":
+                self._backup_linux_partition(partition, backup_dir)
+            elif self.system == "Windows":
+                self._backup_windows_partition(partition, backup_dir)
             
         self._save_metadata(backup_dir)
         logger.info("Full backup completed successfully")
@@ -113,9 +161,9 @@ class BackupManager:
         
         # Implementation depends on OS
         if self.system == "Linux":
-            self._backup_linux_partition(partition, partition_dir)
+            self._backup_linux_partition(partition, backup_dir)
         else:
-            self._backup_windows_partition(partition, partition_dir)
+            self._backup_windows_partition(partition, backup_dir)
 
     def _backup_changed_files(self, previous_backup, new_backup_dir):
         """Backup only files that have changed since last backup"""
