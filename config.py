@@ -27,6 +27,15 @@ BACKUP_CONFIG = {
     ]
 }
 
+# Remote Backup Server Configuration
+REMOTE_CONFIG = {
+    'server_ip': os.getenv('BACKUP_SERVER_IP', ''),
+    'server_port': int(os.getenv('BACKUP_SERVER_PORT', '22')),
+    'server_user': os.getenv('BACKUP_SERVER_USER', ''),
+    'server_path': os.getenv('BACKUP_SERVER_PATH', ''),
+    'ssh_key': os.getenv('BACKUP_SERVER_SSH_KEY', '')
+}
+
 # Schedule Configuration
 SCHEDULE_CONFIG = {
     'full_backup_day': os.getenv('FULL_BACKUP_DAY', 'Sunday'),
@@ -53,9 +62,8 @@ ISO_CONFIG = {
 
 # Default paths
 DEFAULT_PATHS = {
-    'backup_dir': os.path.expanduser('~/Lin-Win-Backup'),
-    'temp_dir': os.path.expanduser('~/Lin-Win-Backup/temp'),
-    'log_dir': os.path.expanduser('~/Lin-Win-Backup/logs')
+    'temp_dir': os.path.expanduser(os.getenv('LOCAL_TEMP_DIR', '~/Lin-Win-Backup/temp')),
+    'log_dir': os.path.expanduser(os.getenv('LOG_DIR', '~/Lin-Win-Backup/logs'))
 }
 
 # Create default directories if they don't exist
