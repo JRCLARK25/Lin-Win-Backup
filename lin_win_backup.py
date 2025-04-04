@@ -62,20 +62,78 @@ class BackupManager:
         # Create a tar archive of the partition
         archive_path = partition_backup_dir / f"{partition.mountpoint.replace('/', '_')}.tar.gz"
         
+        # Additional directories to exclude for Linux
+        linux_exclude_dirs = [
+            '/proc', 
+            '/sys', 
+            '/dev', 
+            '/run', 
+            '/tmp',
+            '/var/tmp',
+            '/var/cache',
+            '/var/log',
+            '/lost+found',
+            '/mnt',
+            '/media',
+            '/boot',
+            '/swap',
+            '/swapfile'
+        ]
+        
+        # Additional files to exclude for Linux
+        linux_exclude_files = [
+            'swapfile',
+            '*.swp',
+            '*.swap',
+            '*.tmp',
+            '*.log',
+            '*.cache',
+            '.cache',
+            '.thumbnails'
+        ]
+        
+        # Combine with existing exclude patterns
+        all_exclude_dirs = linux_exclude_dirs + [p for p in EXCLUDE_PATTERNS if p.startswith('/')]
+        all_exclude_files = linux_exclude_files + [p for p in EXCLUDE_PATTERNS if not p.startswith('/')]
+        
         with tarfile.open(archive_path, 'w:gz') as tar:
             # Walk through the partition directory
             for root, dirs, files in os.walk(partition.mountpoint):
-                # Skip excluded directories
-                if any(exclude in root for exclude in EXCLUDE_PATTERNS):
+                # Skip excluded directories - more robust check
+                should_skip = False
+                for exclude_dir in all_exclude_dirs:
+                    if root.startswith(exclude_dir) or exclude_dir in root.split('/'):
+                        logger.debug(f"Skipping excluded directory: {root}")
+                        should_skip = True
+                        break
+                
+                if should_skip:
+                    # Remove this directory from dirs list to prevent further walking
+                    dirs.clear()
                     continue
                 
                 for file in files:
                     file_path = os.path.join(root, file)
                     try:
-                        # Skip excluded files
-                        if any(file.endswith(pattern.replace('*', '')) for pattern in EXCLUDE_PATTERNS):
+                        # Skip excluded files based on patterns
+                        should_skip_file = False
+                        for pattern in all_exclude_files:
+                            if pattern.startswith('*') and file.endswith(pattern[1:]):
+                                should_skip_file = True
+                                break
+                            elif file == pattern:
+                                should_skip_file = True
+                                break
+                        
+                        if should_skip_file:
+                            logger.debug(f"Skipping excluded file: {file_path}")
                             continue
                         
+                        # Check if we have read access before attempting to read the file
+                        if not os.access(file_path, os.R_OK):
+                            logger.debug(f"Skipping file (no read permission): {file_path}")
+                            continue
+                            
                         # Add file to archive
                         arcname = os.path.relpath(file_path, partition.mountpoint)
                         tar.add(file_path, arcname=arcname)
@@ -86,6 +144,8 @@ class BackupManager:
                             'size': os.path.getsize(file_path),
                             'mtime': os.path.getmtime(file_path)
                         }
+                    except PermissionError:
+                        logger.debug(f"Permission denied: {file_path}")
                     except Exception as e:
                         logger.error(f"Error backing up {file_path}: {e}")
         
