@@ -114,30 +114,48 @@ Replace the values with your actual server information.
 ### Step 1: Create a Full Backup
 
 ```bash
-# On Linux
+# On Linux - using default backup directory from .env
+python3 lin_win_backup.py --type full
+
+# On Linux - with custom destination
 python3 lin_win_backup.py --type full --destination /path/to/backup
 
-# On Windows
+# On Windows - using default backup directory from .env
+python lin_win_backup.py --type full
+
+# On Windows - with custom destination
 python lin_win_backup.py --type full --destination C:\path\to\backup
 ```
 
 ### Step 2: Create an Incremental Backup
 
 ```bash
-# On Linux
+# On Linux - using default backup directory from .env
+python3 lin_win_backup.py --type incremental
+
+# On Linux - with custom destination
 python3 lin_win_backup.py --type incremental --destination /path/to/backup
 
-# On Windows
+# On Windows - using default backup directory from .env
+python lin_win_backup.py --type incremental
+
+# On Windows - with custom destination
 python lin_win_backup.py --type incremental --destination C:\path\to\backup
 ```
 
 ### Step 3: Create a Bootable ISO from a Backup
 
 ```bash
-# On Linux
+# On Linux - using default backup directory from .env
+python3 lin_win_backup.py --type full --create-iso
+
+# On Linux - with custom destination and output ISO
 python3 lin_win_backup.py --type full --destination /path/to/backup --create-iso --output-iso /path/to/output.iso
 
-# On Windows
+# On Windows - using default backup directory from .env
+python lin_win_backup.py --type full --create-iso
+
+# On Windows - with custom destination and output ISO
 python lin_win_backup.py --type full --destination C:\path\to\backup --create-iso --output-iso C:\path\to\output.iso
 ```
 
