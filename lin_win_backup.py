@@ -297,12 +297,13 @@ class BackupManager:
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Lin-Win-Backup: Cross-platform backup solution')
-    parser.add_argument('--type', choices=['full', 'incremental', 'restore', 'iso'], required=True,
+    parser.add_argument('--type', choices=['full', 'incremental', 'restore', 'iso', 'directory'], required=True,
                         help='Type of backup to perform')
     parser.add_argument('--destination', help='Backup destination directory (defaults to BACKUP_DIR from .env)')
     parser.add_argument('--backup', help='Backup to restore from (for restore type)')
     parser.add_argument('--create-iso', action='store_true', help='Create bootable ISO from backup')
     parser.add_argument('--output-iso', help='Output ISO file path')
+    parser.add_argument('--source-dir', help='Source directory to backup (for directory type)')
     
     args = parser.parse_args()
     
@@ -310,6 +311,10 @@ def parse_arguments():
     if not args.destination and args.type != 'restore':
         args.destination = DEFAULT_PATHS['backup_dir']
         logger.info(f"Using default backup directory: {args.destination}")
+    
+    # Verify source-dir is provided when type is directory
+    if args.type == 'directory' and not args.source_dir:
+        parser.error("--source-dir is required when --type is directory")
     
     return args
 
@@ -500,6 +505,102 @@ def create_bootable_iso(backup_path, output_iso):
     # Implementation would go here
     return True
 
+def backup_single_directory(source_dir, destination):
+    """Backup a single directory"""
+    logger.info(f"Backing up directory: {source_dir}")
+    print(f"Starting backup of directory: {source_dir}")
+    
+    # Create backup directory with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = os.path.join(destination, f"dir_backup_{os.path.basename(source_dir)}_{timestamp}")
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    # Create archive path
+    archive_path = os.path.join(backup_dir, f"{os.path.basename(source_dir)}.tar.gz")
+    
+    # Count stats
+    files_processed = 0
+    files_skipped = 0
+    dirs_skipped = 0
+    total_size = 0
+    
+    # Status update interval (seconds)
+    status_interval = 5
+    last_status_time = time.time()
+    
+    # Metadata for this backup
+    metadata = {
+        'type': 'directory',
+        'source': source_dir,
+        'timestamp': datetime.now().isoformat(),
+        'files': {}
+    }
+    
+    with tarfile.open(archive_path, 'w:gz') as tar:
+        # Walk through the source directory
+        for root, dirs, files in os.walk(source_dir):
+            # Show current directory being processed (periodically)
+            if time.time() - last_status_time > status_interval:
+                print(f"Processing: {root} | Files: {files_processed:,} processed, {files_skipped:,} skipped | Size: {total_size / (1024*1024):.2f} MB")
+                last_status_time = time.time()
+                
+            # Show progress for directories with many files
+            if len(files) > 100:
+                print(f"Found {len(files):,} files in {root}")
+                file_progress = tqdm(files, desc=f"Processing {os.path.basename(root)}", leave=False)
+            else:
+                file_progress = files
+                
+            for file in file_progress:
+                file_path = os.path.join(root, file)
+                try:
+                    # Check if we have read access
+                    if not os.access(file_path, os.R_OK):
+                        files_skipped += 1
+                        continue
+                        
+                    # Skip files larger than 4GB for now
+                    file_size = os.path.getsize(file_path)
+                    if file_size > 4 * 1024 * 1024 * 1024:
+                        print(f"Skipping large file (>4GB): {file_path}")
+                        files_skipped += 1
+                        continue
+                        
+                    # Add file to archive
+                    arcname = os.path.relpath(file_path, os.path.dirname(source_dir))
+                    tar.add(file_path, arcname=arcname)
+                    
+                    # Add to metadata
+                    metadata['files'][arcname] = {
+                        'path': file_path,
+                        'size': file_size,
+                        'mtime': os.path.getmtime(file_path)
+                    }
+                    
+                    files_processed += 1
+                    total_size += file_size
+                    
+                except PermissionError:
+                    files_skipped += 1
+                except Exception as e:
+                    logger.error(f"Error backing up {file_path}: {e}")
+                    files_skipped += 1
+    
+    # Save metadata
+    with open(os.path.join(backup_dir, 'metadata.json'), 'w') as f:
+        json.dump(metadata, f, indent=4)
+    
+    # Print final summary
+    print(f"\nDirectory backup completed: {source_dir}")
+    print(f"  ✓ Files processed: {files_processed:,}")
+    print(f"  ✓ Files skipped: {files_skipped:,}")
+    print(f"  ✓ Total data backed up: {total_size / (1024*1024*1024):.2f} GB\n")
+    
+    logger.info(f"Directory backup completed: {source_dir}")
+    logger.info(f"Files processed: {files_processed}, skipped: {files_skipped}, total size: {total_size / (1024*1024):.2f} MB")
+    
+    return backup_dir
+
 def main():
     """Main function to handle backup operations"""
     try:
@@ -535,6 +636,11 @@ def main():
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = str(backup_manager.destination_path / f"incremental_backup_{timestamp}")
             backup_manager.create_incremental_backup()
+        elif args.type == 'directory':
+            # Create a directory backup
+            source_dir = os.path.abspath(args.source_dir)
+            backup_dir = backup_single_directory(source_dir, args.destination)
+            backup_path = backup_dir
         elif args.type == 'restore':
             backup_manager.restore_from_backup(args.backup)
         elif args.type == 'iso':
