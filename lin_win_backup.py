@@ -18,8 +18,11 @@ import json
 import hashlib
 import tarfile
 import gzip
-from config import BACKUP_CONFIG, DEFAULT_PATHS, EXCLUDE_PATTERNS
+from config import BACKUP_CONFIG, DEFAULT_PATHS
 from remote_backup import RemoteBackup
+
+# Get exclude patterns from BACKUP_CONFIG
+EXCLUDE_PATTERNS = BACKUP_CONFIG['exclude_patterns']
 
 class BackupManager:
     def __init__(self, destination_path):
