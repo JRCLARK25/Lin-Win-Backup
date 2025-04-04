@@ -17,27 +17,66 @@ class RemoteBackup:
     def connect(self):
         """Establish SSH connection to remote server"""
         try:
+            # Check if we have all required connection parameters
+            if not self.server_ip:
+                logger.error("Server IP is not configured")
+                return False
+                
+            if not self.server_user:
+                logger.error("Server username is not configured")
+                return False
+                
+            # Create SSH client
             self.ssh_client = paramiko.SSHClient()
             self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             
-            if self.ssh_key:
-                key = paramiko.RSAKey.from_private_key_file(self.ssh_key)
+            # Connect using SSH key if provided
+            if self.ssh_key and os.path.exists(self.ssh_key):
+                try:
+                    key = paramiko.RSAKey.from_private_key_file(self.ssh_key)
+                    logger.info(f"Connecting to {self.server_ip}:{self.server_port} as {self.server_user} using key {self.ssh_key}")
+                    self.ssh_client.connect(
+                        hostname=self.server_ip,
+                        port=self.server_port,
+                        username=self.server_user,
+                        pkey=key,
+                        timeout=10
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to connect with SSH key: {e}")
+                    logger.info("Falling back to password authentication")
+                    # Fall back to password authentication or return False
+                    return False
+            else:
+                # If no key or key doesn't exist, ask for password
+                logger.info(f"SSH key not specified or not found at {self.ssh_key}")
+                logger.info(f"Connecting to {self.server_ip}:{self.server_port} as {self.server_user} with password authentication")
+                
+                # In a real application, you'd prompt for password here,
+                # but for automated scripts, this should come from environment
+                password = os.getenv('BACKUP_SERVER_PASSWORD', '')
+                
+                if not password:
+                    logger.error("No SSH key or password available for authentication")
+                    return False
+                    
                 self.ssh_client.connect(
-                    self.server_ip,
+                    hostname=self.server_ip,
                     port=self.server_port,
                     username=self.server_user,
-                    pkey=key
-                )
-            else:
-                self.ssh_client.connect(
-                    self.server_ip,
-                    port=self.server_port,
-                    username=self.server_user
+                    password=password,
+                    timeout=10
                 )
                 
             logger.info(f"Connected to remote server {self.server_ip}")
             return True
             
+        except paramiko.AuthenticationException:
+            logger.error("Authentication failed. Please check your credentials.")
+            return False
+        except paramiko.SSHException as e:
+            logger.error(f"SSH error: {e}")
+            return False
         except Exception as e:
             logger.error(f"Failed to connect to remote server: {e}")
             return False
