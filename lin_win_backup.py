@@ -18,7 +18,7 @@ import json
 import hashlib
 import tarfile
 import gzip
-from config import BACKUP_CONFIG, DEFAULT_PATHS
+from config import BACKUP_CONFIG, DEFAULT_PATHS, REMOTE_CONFIG
 from remote_backup import RemoteBackup
 
 # Get exclude patterns from BACKUP_CONFIG
@@ -78,7 +78,8 @@ class BackupManager:
             '/media',
             '/boot',
             '/swap',
-            '/swapfile'
+            '/swapfile',
+            '~/Lin-Win-Backup/backups/'
         ]
         
         # Additional files to exclude for Linux
@@ -513,10 +514,26 @@ def main():
         # Create backup manager
         backup_manager = BackupManager(args.destination)
         
+        # Initialize remote backup connection if configured
+        remote_backup = None
+        if 'server_ip' in REMOTE_CONFIG and REMOTE_CONFIG['server_ip']:
+            logger.info(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
+            print(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
+            remote_backup = RemoteBackup()
+            if not remote_backup.connect():
+                logger.error("Failed to connect to remote backup server")
+                print("Failed to connect to remote backup server")
+                remote_backup = None
+        
+        backup_path = None
         # Handle different backup types
         if args.type == 'full':
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = str(backup_manager.destination_path / f"full_backup_{timestamp}")
             backup_manager.create_full_backup()
         elif args.type == 'incremental':
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = str(backup_manager.destination_path / f"incremental_backup_{timestamp}")
             backup_manager.create_incremental_backup()
         elif args.type == 'restore':
             backup_manager.restore_from_backup(args.backup)
@@ -525,7 +542,29 @@ def main():
         else:
             logger.error(f"Unknown backup type: {args.type}")
             return 1
-            
+        
+        # Transfer backup to remote server if configured
+        if remote_backup and backup_path:
+            try:
+                print(f"\nUploading backup to remote server at {REMOTE_CONFIG['server_ip']}...")
+                logger.info(f"Starting upload of {backup_path} to remote server")
+                
+                remote_path = os.path.join(REMOTE_CONFIG['server_path'], os.path.basename(backup_path))
+                
+                # Ensure remote directory exists
+                remote_backup.ensure_remote_directory(REMOTE_CONFIG['server_path'])
+                
+                # Upload the entire backup directory
+                remote_backup.upload_directory(backup_path, remote_path)
+                
+                print(f"✓ Backup successfully uploaded to remote server")
+                logger.info(f"Backup successfully uploaded to remote server at {remote_path}")
+            except Exception as e:
+                print(f"× Failed to upload backup to remote server: {str(e)}")
+                logger.error(f"Failed to upload backup to remote server: {str(e)}")
+            finally:
+                remote_backup.disconnect()
+                
         return 0
         
     except Exception as e:
