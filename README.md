@@ -12,6 +12,8 @@ A cross-platform backup solution for Windows and Linux systems that provides ful
 - Backup scheduling
 - Backup verification
 - Restore capabilities
+- Agent for scheduled backups
+- Web interface for monitoring
 
 ## Requirements
 
@@ -33,27 +35,64 @@ cd Lin-Win-Backup
 pip install -r requirements.txt
 ```
 
+3. Configure the backup settings:
+```bash
+cp .env.example .env
+# Edit .env with your preferred settings
+```
+
 ## Usage
 
 ### Creating a Full Backup
 ```bash
-python lin_win_backup.py full-backup --destination /path/to/backup
+python lin_win_backup.py --type full --destination /path/to/backup
 ```
 
 ### Creating an Incremental Backup
 ```bash
-python lin_win_backup.py incremental-backup --destination /path/to/backup
+python lin_win_backup.py --type incremental --destination /path/to/backup
 ```
 
 ### Creating a Bootable ISO
 ```bash
-python lin_win_backup.py create-iso --backup /path/to/backup --output /path/to/output.iso
+python lin_win_backup.py --type full --destination /path/to/backup --create-iso --output-iso /path/to/output.iso
 ```
 
 ### Restoring from Backup
 ```bash
-python lin_win_backup.py restore --backup /path/to/backup
+python lin_win_backup.py --type restore --backup /path/to/backup
 ```
+
+## Agent and Monitoring
+
+### Installing the Agent as a Service
+
+#### Linux
+```bash
+sudo python install_service.py --backup-dir /path/to/backup
+```
+
+#### Windows
+```bash
+python install_service.py --backup-dir C:\path\to\backup
+```
+
+### Running the Agent Manually
+```bash
+python agent.py --backup-dir /path/to/backup
+```
+
+### Web Interface
+```bash
+python web_interface.py --backup-dir /path/to/backup
+```
+
+The web interface provides real-time monitoring of:
+- Agent status
+- Current backup progress
+- Next scheduled backup
+- Disk usage
+- Backup history
 
 ## License
 
