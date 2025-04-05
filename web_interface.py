@@ -8,7 +8,7 @@ import socketserver
 import threading
 import webbrowser
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from loguru import logger
 import socket
 
@@ -423,13 +423,51 @@ def run_web_interface(backup_dir=None, port=3000, open_browser=True):
                     "hostname": socket.gethostname(),
                     "system": "Linux",
                     "status": "idle",
-                    "current_backup": None,
-                    "next_scheduled": None,
+                    "current_backup": {
+                        "type": "directory",
+                        "start_time": datetime.now().isoformat(),
+                        "status": "in_progress",
+                        "progress": 45,
+                        "eta": "2 minutes",
+                        "source": "/home/puppy/test",
+                        "destination": "/home/puppy/Lin-Win-Backup/backups"
+                    },
+                    "next_scheduled": {
+                        "type": "incremental",
+                        "time": (datetime.now() + timedelta(hours=1)).isoformat(),
+                        "source": "/home/puppy/test",
+                        "destination": "/home/puppy/Lin-Win-Backup/backups"
+                    },
                     "disk_usage": {
                         "/": {"total": 100000000000, "used": 50000000000, "free": 50000000000, "percent": 50},
                         "/home": {"total": 500000000000, "used": 200000000000, "free": 300000000000, "percent": 40}
                     },
-                    "backup_history": []
+                    "backup_history": [
+                        {
+                            "type": "full",
+                            "start_time": (datetime.now() - timedelta(days=1)).isoformat(),
+                            "end_time": (datetime.now() - timedelta(days=1, hours=-1)).isoformat(),
+                            "status": "completed",
+                            "size": 1500000000,
+                            "files": 150
+                        },
+                        {
+                            "type": "incremental",
+                            "start_time": (datetime.now() - timedelta(hours=12)).isoformat(),
+                            "end_time": (datetime.now() - timedelta(hours=11, minutes=45)).isoformat(),
+                            "status": "completed",
+                            "size": 500000000,
+                            "files": 50
+                        },
+                        {
+                            "type": "directory",
+                            "start_time": (datetime.now() - timedelta(hours=6)).isoformat(),
+                            "end_time": (datetime.now() - timedelta(hours=5, minutes=30)).isoformat(),
+                            "status": "completed",
+                            "size": 800000000,
+                            "files": 80
+                        }
+                    ]
                 }
                 try:
                     with open(self.status_file, 'w') as f:
