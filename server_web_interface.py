@@ -851,9 +851,7 @@ def run_server(port=3000):
 def main():
     """Parse arguments and start server web interface"""
     parser = argparse.ArgumentParser(description='Lin-Win-Backup Server Web Interface')
-    parser.add_argument('--clients-dir', help='Clients directory to monitor')
-    parser.add_argument('--port', type=int, default=3001, help='Port to run the server web interface on (default: 3001)')
-    parser.add_argument('--no-browser', action='store_true', help='Do not open browser automatically')
+    parser.add_argument('--port', type=int, default=3000, help='Port to run the server on (default: 3000)')
     
     args = parser.parse_args()
     
@@ -862,11 +860,8 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     logger.add(os.path.join(log_dir, "server_web_interface.log"), rotation="1 day", retention="7 days")
     
-    # Start server web interface
-    run_server(
-        port=args.port,
-        open_browser=not args.no_browser
-    )
+    # Start server
+    run_server(port=args.port)
 
 if __name__ == "__main__":
     main() 
