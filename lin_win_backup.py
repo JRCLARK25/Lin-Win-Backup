@@ -400,19 +400,91 @@ def create_full_backup(destination):
     else:
         root_dir = '/'
     
+    # First pass: calculate total size and file count for accurate progress
+    print("Calculating total size and file count...")
+    total_size_bytes = 0
+    total_files = 0
+    for root, _, files in os.walk(root_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
+                if not should_exclude(Path(file_path)):
+                    total_size_bytes += os.path.getsize(file_path)
+                    total_files += 1
+            except (PermissionError, OSError):
+                pass
+    
+    processed_size = 0
+    processed_files = 0
+    
     # Create archive
     archive_path = os.path.join(backup_dir, 'backup.tar.gz')
+    start_time = time.time()
+    
+    # Status update interval (seconds)
+    status_interval = 1  # Update more frequently
+    last_status_time = time.time()
+    
     with tarfile.open(archive_path, 'w:gz') as tar:
         for root, dirs, files in os.walk(root_dir):
+            # Show progress
+            if time.time() - last_status_time > status_interval:
+                elapsed_time = time.time() - start_time
+                
+                # Calculate progress based on both file count and size
+                if total_files > 0 and total_size_bytes > 0:
+                    # Weighted average of file count progress and size progress
+                    file_progress = (processed_files / total_files) * 100
+                    size_progress = (processed_size / total_size_bytes) * 100
+                    progress = (file_progress + size_progress) / 2
+                    
+                    # Calculate ETA based on processed files and size
+                    if processed_files > 0 and processed_size > 0:
+                        # Average time per file and per byte
+                        time_per_file = elapsed_time / processed_files
+                        time_per_byte = elapsed_time / processed_size
+                        
+                        # Remaining files and bytes
+                        remaining_files = total_files - processed_files
+                        remaining_bytes = total_size_bytes - processed_size
+                        
+                        # Estimate time based on both metrics
+                        eta_files = time_per_file * remaining_files
+                        eta_bytes = time_per_byte * remaining_bytes
+                        
+                        # Use the larger estimate for a more conservative ETA
+                        eta = max(eta_files, eta_bytes)
+                        
+                        # Format ETA
+                        if eta > 60:
+                            eta_str = f"{eta/60:.1f} minutes"
+                        else:
+                            eta_str = f"{eta:.0f} seconds"
+                    else:
+                        eta_str = "calculating..."
+                else:
+                    progress = 0
+                    eta_str = "calculating..."
+                
+                print(f"\rProgress: {progress:.1f}% | ETA: {eta_str} | Files: {processed_files}/{total_files} | Size: {format_size(processed_size)}/{format_size(total_size_bytes)}", end='', flush=True)
+                last_status_time = time.time()
+            
             for file in files:
                 file_path = os.path.join(root, file)
                 try:
                     # Skip excluded files
                     if should_exclude(Path(file_path)):
                         continue
-                        
+                    
+                    # Get file size before adding to archive
+                    file_size = os.path.getsize(file_path)
+                    
                     # Add file to archive
                     tar.add(file_path, arcname=os.path.relpath(file_path, root_dir))
+                    
+                    # Update stats
+                    processed_files += 1
+                    processed_size += file_size
                     
                     # Add to metadata
                     metadata['files'].append({
@@ -425,6 +497,9 @@ def create_full_backup(destination):
     # Save metadata
     with open(os.path.join(backup_dir, 'metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=2)
+    
+    print(f"\nFull backup completed: {backup_dir}")
+    print(f"Total size: {format_size(processed_size)}")
     
     logger.info(f"Full backup completed: {backup_dir}")
     return backup_dir
@@ -466,10 +541,76 @@ def create_incremental_backup(destination):
     else:
         root_dir = '/'
     
+    # First pass: calculate total size and file count for accurate progress
+    print("Calculating total size and file count...")
+    total_size_bytes = 0
+    total_files = 0
+    for root, _, files in os.walk(root_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
+                if not should_exclude(Path(file_path)):
+                    total_size_bytes += os.path.getsize(file_path)
+                    total_files += 1
+            except (PermissionError, OSError):
+                pass
+    
+    processed_size = 0
+    processed_files = 0
+    changed_files = 0
+    
     # Create archive
     archive_path = os.path.join(backup_dir, 'backup.tar.gz')
+    start_time = time.time()
+    
+    # Status update interval (seconds)
+    status_interval = 1  # Update more frequently
+    last_status_time = time.time()
+    
     with tarfile.open(archive_path, 'w:gz') as tar:
         for root, dirs, files in os.walk(root_dir):
+            # Show progress
+            if time.time() - last_status_time > status_interval:
+                elapsed_time = time.time() - start_time
+                
+                # Calculate progress based on both file count and size
+                if total_files > 0 and total_size_bytes > 0:
+                    # Weighted average of file count progress and size progress
+                    file_progress = (processed_files / total_files) * 100
+                    size_progress = (processed_size / total_size_bytes) * 100
+                    progress = (file_progress + size_progress) / 2
+                    
+                    # Calculate ETA based on processed files and size
+                    if processed_files > 0 and processed_size > 0:
+                        # Average time per file and per byte
+                        time_per_file = elapsed_time / processed_files
+                        time_per_byte = elapsed_time / processed_size
+                        
+                        # Remaining files and bytes
+                        remaining_files = total_files - processed_files
+                        remaining_bytes = total_size_bytes - processed_size
+                        
+                        # Estimate time based on both metrics
+                        eta_files = time_per_file * remaining_files
+                        eta_bytes = time_per_byte * remaining_bytes
+                        
+                        # Use the larger estimate for a more conservative ETA
+                        eta = max(eta_files, eta_bytes)
+                        
+                        # Format ETA
+                        if eta > 60:
+                            eta_str = f"{eta/60:.1f} minutes"
+                        else:
+                            eta_str = f"{eta:.0f} seconds"
+                    else:
+                        eta_str = "calculating..."
+                else:
+                    progress = 0
+                    eta_str = "calculating..."
+                
+                print(f"\rProgress: {progress:.1f}% | ETA: {eta_str} | Files: {processed_files}/{total_files} | Changed: {changed_files} | Size: {format_size(processed_size)}/{format_size(total_size_bytes)}", end='', flush=True)
+                last_status_time = time.time()
+            
             for file in files:
                 file_path = os.path.join(root, file)
                 try:
@@ -487,6 +628,9 @@ def create_incremental_backup(destination):
                             file_changed = False
                             break
                     
+                    # Get file size before adding to archive
+                    file_size = os.path.getsize(file_path)
+                    
                     if file_changed:
                         # Add file to archive
                         tar.add(file_path, arcname=rel_path)
@@ -496,12 +640,21 @@ def create_incremental_backup(destination):
                             'path': rel_path,
                             'hash': file_hash
                         })
+                        changed_files += 1
+                    
+                    # Update stats
+                    processed_files += 1
+                    processed_size += file_size
                 except Exception as e:
                     logger.error(f"Error processing {file_path}: {e}")
     
     # Save metadata
     with open(os.path.join(backup_dir, 'metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=2)
+    
+    print(f"\nIncremental backup completed: {backup_dir}")
+    print(f"Total size: {format_size(processed_size)}")
+    print(f"Changed files: {changed_files}")
     
     logger.info(f"Incremental backup completed: {backup_dir}")
     return backup_dir
@@ -568,12 +721,25 @@ def backup_single_directory(source_dir, destination, verbose=False):
     total_size = 0
     start_time = time.time()
     
-    # Get total size for progress calculation
-    total_files = sum([len(files) for _, _, files in os.walk(source_dir)])
+    # First pass: calculate total size and file count for accurate progress
+    print("Calculating total size and file count...")
+    total_size_bytes = 0
+    total_files = 0
+    for root, _, files in os.walk(source_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
+                if not should_exclude(Path(file_path)):
+                    total_size_bytes += os.path.getsize(file_path)
+                    total_files += 1
+            except (PermissionError, OSError):
+                pass
+    
+    processed_size = 0
     processed_files = 0
     
     # Status update interval (seconds)
-    status_interval = 5
+    status_interval = 1  # Update more frequently
     last_status_time = time.time()
     
     # Metadata for this backup
@@ -590,17 +756,46 @@ def backup_single_directory(source_dir, destination, verbose=False):
             # Show progress
             if time.time() - last_status_time > status_interval:
                 elapsed_time = time.time() - start_time
-                progress = (processed_files / total_files) * 100
-                if total_files > 0:
-                    eta = (elapsed_time / processed_files) * (total_files - processed_files)
-                    eta_str = f"{eta/60:.1f} minutes" if eta > 60 else f"{eta:.0f} seconds"
+                
+                # Calculate progress based on both file count and size
+                if total_files > 0 and total_size_bytes > 0:
+                    # Weighted average of file count progress and size progress
+                    file_progress = (processed_files / total_files) * 100
+                    size_progress = (processed_size / total_size_bytes) * 100
+                    progress = (file_progress + size_progress) / 2
+                    
+                    # Calculate ETA based on processed files and size
+                    if processed_files > 0 and processed_size > 0:
+                        # Average time per file and per byte
+                        time_per_file = elapsed_time / processed_files
+                        time_per_byte = elapsed_time / processed_size
+                        
+                        # Remaining files and bytes
+                        remaining_files = total_files - processed_files
+                        remaining_bytes = total_size_bytes - processed_size
+                        
+                        # Estimate time based on both metrics
+                        eta_files = time_per_file * remaining_files
+                        eta_bytes = time_per_byte * remaining_bytes
+                        
+                        # Use the larger estimate for a more conservative ETA
+                        eta = max(eta_files, eta_bytes)
+                        
+                        # Format ETA
+                        if eta > 60:
+                            eta_str = f"{eta/60:.1f} minutes"
+                        else:
+                            eta_str = f"{eta:.0f} seconds"
+                    else:
+                        eta_str = "calculating..."
                 else:
+                    progress = 0
                     eta_str = "calculating..."
                 
                 if verbose:
                     print(f"Processing: {root} | Files: {files_processed:,} processed, {files_skipped:,} skipped | Size: {format_size(total_size)}")
                 else:
-                    print(f"\rProgress: {progress:.1f}% | ETA: {eta_str}", end='', flush=True)
+                    print(f"\rProgress: {progress:.1f}% | ETA: {eta_str} | Files: {processed_files}/{total_files} | Size: {format_size(processed_size)}/{format_size(total_size_bytes)}", end='', flush=True)
                 last_status_time = time.time()
             
             # Show progress for directories with many files
@@ -618,17 +813,21 @@ def backup_single_directory(source_dir, destination, verbose=False):
                         files_skipped += 1
                         continue
                     
+                    # Get file size before adding to archive
+                    file_size = os.path.getsize(file_path)
+                    
                     # Add file to archive
                     tar.add(file_path, arcname=os.path.relpath(file_path, source_dir))
                     
                     # Update stats
                     files_processed += 1
                     processed_files += 1
-                    total_size += os.path.getsize(file_path)
+                    processed_size += file_size
+                    total_size += file_size
                     
                     # Add to metadata
                     metadata['files'][os.path.relpath(file_path, source_dir)] = {
-                        'size': os.path.getsize(file_path),
+                        'size': file_size,
                         'hash': get_file_hash(file_path)
                     }
                 except PermissionError:
