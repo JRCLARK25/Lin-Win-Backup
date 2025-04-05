@@ -1,8 +1,9 @@
+cryptography>=41.0.0
+requests>=2.31.0
 psutil>=5.9.0
 pywin32>=305; platform_system == "Windows"
 python-magic>=0.4.27
 tqdm>=4.65.0
-cryptography>=41.0.0
 pycdlib>=1.13.0
 argparse>=1.4.0
 schedule>=1.2.0
