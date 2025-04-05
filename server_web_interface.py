@@ -630,16 +630,24 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         # Get request body
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length)
-        data = json.loads(body.decode())
+        
+        # Handle empty request body
+        if not body:
+            if path == '/logout':
+                self._handle_logout()
+                return
+            self._send_error(400, "Empty request body")
+            return
+            
+        try:
+            data = json.loads(body.decode())
+        except json.JSONDecodeError:
+            self._send_error(400, "Invalid JSON in request body")
+            return
         
         # Handle login
         if path == '/login':
             self._handle_login(data)
-            return
-        
-        # Handle logout
-        if path == '/logout':
-            self._handle_logout()
             return
         
         # API endpoints
