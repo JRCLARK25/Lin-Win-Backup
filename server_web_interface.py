@@ -600,6 +600,7 @@ DASHBOARD_TEMPLATE = """
 
 class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
     encryption = None  # Class variable to store the encryption manager
+    users_file = os.path.expanduser('~/Lin-Win-Backup/clients/users.json')
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -613,11 +614,17 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         if path == '/':
             self._serve_login_page()
         elif path == '/dashboard':
+            if not self._check_auth():
+                self._redirect_to_login()
+                return
             self._serve_dashboard_page()
         # API endpoints
         elif path == '/api/public_key':
             self._handle_public_key()
         elif path.startswith('/api/client/'):
+            if not self._check_auth():
+                self._send_error(401, "Unauthorized")
+                return
             client_id = path.split('/')[3]
             if path.endswith('/status'):
                 self._handle_client_status(client_id)
@@ -653,10 +660,23 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         body = self.rfile.read(content_length)
         data = json.loads(body.decode())
         
+        # Handle login
+        if path == '/login':
+            self._handle_login(data)
+            return
+        
+        # Handle logout
+        if path == '/logout':
+            self._handle_logout()
+            return
+        
         # API endpoints
         if path == '/api/register_client':
             self._handle_register_client(data)
         elif path.startswith('/api/client/'):
+            if not self._check_auth():
+                self._send_error(401, "Unauthorized")
+                return
             client_id = path.split('/')[3]
             if path.endswith('/status'):
                 self._handle_client_status_update(client_id, data)
@@ -667,6 +687,100 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_error(404, "Not found")
         else:
             self._send_error(404, "Not found")
+    
+    def _check_auth(self):
+        """Check if user is authenticated"""
+        if 'Cookie' not in self.headers:
+            return False
+        
+        auth_cookie = self.headers['Cookie']
+        if not auth_cookie.startswith('auth_token='):
+            return False
+        
+        token = auth_cookie.split('=')[1].split(';')[0]
+        return self._verify_token(token)
+    
+    def _verify_token(self, token):
+        """Verify authentication token"""
+        try:
+            with open(self.users_file, 'r') as f:
+                users = json.load(f)
+                return any(user.get('token') == token for user in users)
+        except:
+            return False
+    
+    def _redirect_to_login(self):
+        """Redirect to login page"""
+        self.send_response(302)
+        self.send_header('Location', '/')
+        self.end_headers()
+    
+    def _handle_login(self, data):
+        """Handle login request"""
+        username = data.get('username')
+        password = data.get('password')
+        
+        try:
+            with open(self.users_file, 'r') as f:
+                users = json.load(f)
+            
+            user = next((u for u in users if u['username'] == username), None)
+            
+            if user and self._verify_password(password, user['password']):
+                # Generate a new token
+                token = secrets.token_urlsafe(32)
+                user['token'] = token
+                
+                # Update the users file
+                with open(self.users_file, 'w') as f:
+                    json.dump(users, f, indent=2)
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Set-Cookie', f'auth_token={token}; Path=/; HttpOnly')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': True}).encode())
+            else:
+                self.send_response(401)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid credentials'}).encode())
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+    
+    def _handle_logout(self):
+        """Handle logout request"""
+        if 'Cookie' in self.headers:
+            auth_cookie = self.headers['Cookie']
+            if auth_cookie.startswith('auth_token='):
+                token = auth_cookie.split('=')[1].split(';')[0]
+                
+                try:
+                    with open(self.users_file, 'r') as f:
+                        users = json.load(f)
+                    
+                    # Remove the token from the user
+                    for user in users:
+                        if user.get('token') == token:
+                            user.pop('token', None)
+                    
+                    with open(self.users_file, 'w') as f:
+                        json.dump(users, f, indent=2)
+                except:
+                    pass
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Set-Cookie', 'auth_token=; Path=/; HttpOnly; Max-Age=0')
+        self.end_headers()
+        self.wfile.write(json.dumps({'success': True}).encode())
+    
+    def _verify_password(self, password, hashed_password):
+        """Verify password against hash"""
+        return hashlib.sha256(password.encode()).hexdigest() == hashed_password
     
     def _handle_public_key(self):
         """Handle request for server's public key"""
@@ -844,6 +958,20 @@ def run_server(port=3000):
     # Create necessary directories
     os.makedirs(os.path.expanduser('~/Lin-Win-Backup/clients'), exist_ok=True)
     os.makedirs(os.path.expanduser('~/Lin-Win-Backup/keys/server'), exist_ok=True)
+    
+    # Create users file if it doesn't exist
+    users_file = os.path.expanduser('~/Lin-Win-Backup/clients/users.json')
+    if not os.path.exists(users_file):
+        # Create default admin user
+        default_users = [
+            {
+                "username": "admin",
+                "password": hashlib.sha256("admin".encode()).hexdigest(),
+                "role": "admin"
+            }
+        ]
+        with open(users_file, 'w') as f:
+            json.dump(default_users, f, indent=2)
     
     # Initialize encryption manager
     encryption = EncryptionManager()
