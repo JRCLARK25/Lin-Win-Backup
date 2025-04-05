@@ -599,8 +599,9 @@ DASHBOARD_TEMPLATE = """
 """
 
 class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
+    encryption = None  # Class variable to store the encryption manager
+    
     def __init__(self, *args, **kwargs):
-        self.encryption = EncryptionManager()
         super().__init__(*args, **kwargs)
     
     def do_GET(self):
@@ -828,11 +829,11 @@ def run_server(port=3000):
     # Initialize encryption manager
     encryption = EncryptionManager()
     
-    # Create handler with encryption manager
-    handler = lambda *args: ServerAPIHandler(*args, encryption=encryption)
+    # Set the encryption manager as a class variable
+    ServerAPIHandler.encryption = encryption
     
     # Start server
-    with socketserver.TCPServer(("0.0.0.0", port), handler) as httpd:
+    with socketserver.TCPServer(("0.0.0.0", port), ServerAPIHandler) as httpd:
         print(f"Server started on port {port}")
         print("Local access: http://localhost:3000")
         
