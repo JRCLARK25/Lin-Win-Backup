@@ -431,11 +431,11 @@ DASHBOARD_TEMPLATE = """
                 
                 document.getElementById('hostname').textContent = data.hostname;
                 document.getElementById('system').textContent = data.system;
-                updateStatusBadge(document.getElementById('client-status'), data.status);
-                document.getElementById('last-updated').textContent = formatDate(new Date());
+                updateStatusBadge(document.getElementById('client-status'), data.status || 'Unknown');
+                document.getElementById('last-updated').textContent = formatDate(data.last_seen);
                 
                 updateCurrentBackup(data.current_backup);
-                updateScheduleInfo(data.schedule);
+                updateScheduleInfo(data.next_scheduled);
                 updateBackupHistory(data.backup_history);
                 
                 currentClient = clientId;
@@ -465,28 +465,17 @@ DASHBOARD_TEMPLATE = """
         function updateScheduleInfo(schedule) {
             const element = document.getElementById('schedule-info');
             
-            if (!schedule || schedule.length === 0) {
+            if (!schedule) {
                 element.innerHTML = '<p>No scheduled backups</p>';
                 return;
             }
             
-            let html = '<table><thead><tr><th>Type</th><th>Time</th><th>Source</th><th>Actions</th></tr></thead><tbody>';
-            
-            schedule.forEach(item => {
-                html += `
-                    <tr>
-                        <td>${item.type}</td>
-                        <td>${formatDate(item.time)}</td>
-                        <td>${item.source}</td>
-                        <td>
-                            <button class="btn btn-danger" onclick="deleteSchedule('${item.id}')">Delete</button>
-                        </td>
-                    </tr>
-                `;
-            });
-            
-            html += '</tbody></table>';
-            element.innerHTML = html;
+            element.innerHTML = `
+                <p><strong>Type:</strong> ${schedule.type}</p>
+                <p><strong>Scheduled Time:</strong> ${formatDate(schedule.time)}</p>
+                <p><strong>Source:</strong> ${schedule.source}</p>
+                <p><strong>Destination:</strong> ${schedule.destination}</p>
+            `;
         }
         
         function updateBackupHistory(history) {
@@ -555,28 +544,6 @@ DASHBOARD_TEMPLATE = """
             return false;
         }
         
-        async function deleteSchedule(scheduleId) {
-            if (!confirm('Are you sure you want to delete this schedule?')) {
-                return;
-            }
-            
-            try {
-                const response = await fetch(`/api/client/${currentClient}/schedule/${scheduleId}`, {
-                    method: 'DELETE',
-                });
-                
-                if (response.ok) {
-                    loadClientData();
-                } else {
-                    const data = await response.json();
-                    alert(data.error || 'Failed to delete schedule');
-                }
-            } catch (error) {
-                console.error('Error deleting schedule:', error);
-                alert('An error occurred while deleting the schedule');
-            }
-        }
-        
         async function handleLogout() {
             try {
                 const response = await fetch('/logout', {
@@ -621,6 +588,11 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         # API endpoints
         elif path == '/api/public_key':
             self._handle_public_key()
+        elif path == '/api/clients':
+            if not self._check_auth():
+                self._send_error(401, "Unauthorized")
+                return
+            self._handle_get_clients()
         elif path.startswith('/api/client/'):
             if not self._check_auth():
                 self._send_error(401, "Unauthorized")
@@ -631,7 +603,7 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             elif path.endswith('/schedule'):
                 self._handle_client_schedule(client_id)
             else:
-                self._send_error(404, "Not found")
+                self._handle_get_client(client_id)
         else:
             # Serve static files
             super().do_GET()
@@ -952,6 +924,48 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
+    
+    def _handle_get_clients(self):
+        """Handle request to get all clients"""
+        try:
+            clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
+            if not os.path.exists(clients_file):
+                self._send_json_response([])
+                return
+            
+            with open(clients_file, 'r') as f:
+                clients = json.load(f)
+            
+            # Convert clients dict to list with id field
+            clients_list = []
+            for client_id, client_data in clients.items():
+                client_data['id'] = client_id
+                clients_list.append(client_data)
+            
+            self._send_json_response(clients_list)
+        except Exception as e:
+            self._send_error(500, str(e))
+    
+    def _handle_get_client(self, client_id):
+        """Handle request to get a specific client"""
+        try:
+            clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
+            if not os.path.exists(clients_file):
+                self._send_error(404, "Client not found")
+                return
+            
+            with open(clients_file, 'r') as f:
+                clients = json.load(f)
+            
+            if client_id not in clients:
+                self._send_error(404, "Client not found")
+                return
+            
+            client_data = clients[client_id]
+            client_data['id'] = client_id
+            self._send_json_response(client_data)
+        except Exception as e:
+            self._send_error(500, str(e))
 
 def run_server(port=3000):
     """Run the server"""
