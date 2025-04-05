@@ -70,11 +70,11 @@ class BackupManager:
             print(f"Backing up partition: {partition.mountpoint}")
         
         # Create partition directory
-        partition_dir = backup_dir / partition.mountpoint.replace('/', '_').replace('\\', '_')
+        partition_dir = backup_dir / partition.mountpoint.replace('/', '_').replace(chr(92), '_')
         partition_dir.mkdir(exist_ok=True)
         
         # Create archive
-        archive_path = partition_dir / f"{partition.mountpoint.replace('/', '_').replace('\\', '_')}.tar.gz"
+        archive_path = partition_dir / f"{partition.mountpoint.replace('/', '_').replace(chr(92), '_')}.tar.gz"
         
         # Count stats
         files_processed = 0
