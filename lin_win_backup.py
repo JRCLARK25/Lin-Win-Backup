@@ -656,7 +656,32 @@ def backup_single_directory(source_dir, destination, verbose=False):
     
     logger.info(f"Files processed: {files_processed}, skipped: {files_skipped}, total size: {format_size(total_size)}")
     
-    return backup_dir
+    # Try remote backup if enabled
+    remote_backup_successful = False
+    if REMOTE_CONFIG.get('server_ip'):
+        try:
+            if verbose:
+                print(f"\nUploading backup to remote server...")
+            remote_backup = RemoteBackup()
+            if remote_backup.connect():
+                remote_path = os.path.join(REMOTE_CONFIG['server_path'], os.path.basename(backup_dir))
+                remote_backup.ensure_remote_directory(REMOTE_CONFIG['server_path'])
+                remote_backup.upload_directory(backup_dir, remote_path)
+                if verbose:
+                    print(f"✓ Backup successfully uploaded to remote server")
+                remote_backup_successful = True
+            else:
+                if verbose:
+                    print(f"× Failed to connect to remote server")
+        except Exception as e:
+            if verbose:
+                print(f"× Failed to upload backup to remote server: {str(e)}")
+        finally:
+            if 'remote_backup' in locals():
+                remote_backup.disconnect()
+    
+    # Return both the backup directory and remote backup status
+    return backup_dir, remote_backup_successful
 
 def prompt_delete_local_backup(backup_path):
     """Prompt user to delete local backup after successful remote backup"""
@@ -716,13 +741,12 @@ def main():
         elif args.type == 'directory':
             # Create a directory backup
             source_dir = os.path.abspath(args.source_dir)
-            backup_dir = backup_single_directory(source_dir, args.destination, args.verbose)
-            backup_path = backup_dir
+            backup_dir, remote_backup_successful = backup_single_directory(source_dir, args.destination, args.verbose)
             
             # If remote backup is enabled and successful, prompt to delete local backup
-            if not args.skip_remote and backup_manager.remote_backup_enabled:
-                if backup_manager.remote_backup_successful:
-                    prompt_delete_local_backup(backup_path)
+            if not args.skip_remote and REMOTE_CONFIG.get('server_ip'):
+                if remote_backup_successful:
+                    prompt_delete_local_backup(backup_dir)
                     
         elif args.type == 'restore':
             backup_manager.restore_from_backup(args.backup)
