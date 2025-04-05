@@ -416,77 +416,69 @@ def run_web_interface(backup_dir=None, port=3000, open_browser=True):
             print(f"\nDebug: Initializing CustomStatusHandler")
             print(f"Debug: Status file path: {self.status_file}")
             
-            if not self.status_file.exists():
-                print(f"Debug: Status file does not exist, creating sample file")
-                # Create a sample status file if it doesn't exist
-                sample_status = {
-                    "hostname": socket.gethostname(),
-                    "system": "Linux",
-                    "status": "idle",
-                    "current_backup": {
-                        "type": "directory",
-                        "start_time": datetime.now().isoformat(),
-                        "status": "in_progress",
-                        "progress": 45,
-                        "eta": "2 minutes",
-                        "source": "/home/puppy/test",
-                        "destination": "/home/puppy/Lin-Win-Backup/backups"
+            # Always create a fresh status file on startup
+            print(f"Debug: Creating fresh status file")
+            sample_status = {
+                "hostname": socket.gethostname(),
+                "system": "Linux",
+                "status": "idle",
+                "current_backup": {
+                    "type": "directory",
+                    "start_time": datetime.now().isoformat(),
+                    "status": "in_progress",
+                    "progress": 45,
+                    "eta": "2 minutes",
+                    "source": "/home/puppy/test",
+                    "destination": "/home/puppy/Lin-Win-Backup/backups"
+                },
+                "next_scheduled": {
+                    "type": "incremental",
+                    "time": (datetime.now() + timedelta(hours=1)).isoformat(),
+                    "source": "/home/puppy/test",
+                    "destination": "/home/puppy/Lin-Win-Backup/backups"
+                },
+                "disk_usage": {
+                    "/": {"total": 100000000000, "used": 50000000000, "free": 50000000000, "percent": 50},
+                    "/home": {"total": 500000000000, "used": 200000000000, "free": 300000000000, "percent": 40}
+                },
+                "backup_history": [
+                    {
+                        "type": "full",
+                        "start_time": (datetime.now() - timedelta(days=1)).isoformat(),
+                        "end_time": (datetime.now() - timedelta(days=1, hours=-1)).isoformat(),
+                        "status": "completed",
+                        "size": 1500000000,
+                        "files": 150
                     },
-                    "next_scheduled": {
+                    {
                         "type": "incremental",
-                        "time": (datetime.now() + timedelta(hours=1)).isoformat(),
-                        "source": "/home/puppy/test",
-                        "destination": "/home/puppy/Lin-Win-Backup/backups"
+                        "start_time": (datetime.now() - timedelta(hours=12)).isoformat(),
+                        "end_time": (datetime.now() - timedelta(hours=11, minutes=45)).isoformat(),
+                        "status": "completed",
+                        "size": 500000000,
+                        "files": 50
                     },
-                    "disk_usage": {
-                        "/": {"total": 100000000000, "used": 50000000000, "free": 50000000000, "percent": 50},
-                        "/home": {"total": 500000000000, "used": 200000000000, "free": 300000000000, "percent": 40}
-                    },
-                    "backup_history": [
-                        {
-                            "type": "full",
-                            "start_time": (datetime.now() - timedelta(days=1)).isoformat(),
-                            "end_time": (datetime.now() - timedelta(days=1, hours=-1)).isoformat(),
-                            "status": "completed",
-                            "size": 1500000000,
-                            "files": 150
-                        },
-                        {
-                            "type": "incremental",
-                            "start_time": (datetime.now() - timedelta(hours=12)).isoformat(),
-                            "end_time": (datetime.now() - timedelta(hours=11, minutes=45)).isoformat(),
-                            "status": "completed",
-                            "size": 500000000,
-                            "files": 50
-                        },
-                        {
-                            "type": "directory",
-                            "start_time": (datetime.now() - timedelta(hours=6)).isoformat(),
-                            "end_time": (datetime.now() - timedelta(hours=5, minutes=30)).isoformat(),
-                            "status": "completed",
-                            "size": 800000000,
-                            "files": 80
-                        }
-                    ]
-                }
-                try:
-                    with open(self.status_file, 'w') as f:
-                        json.dump(sample_status, f, indent=2)
-                    print(f"Debug: Created sample status file at {self.status_file}")
-                    # Verify the file was created and is readable
-                    with open(self.status_file, 'r') as f:
-                        json.load(f)
-                    print(f"Debug: Verified status file is readable and contains valid JSON")
-                except Exception as e:
-                    print(f"Error: Failed to create/verify sample status file: {e}")
-            else:
-                print(f"Debug: Status file exists at {self.status_file}")
-                try:
-                    with open(self.status_file, 'r') as f:
-                        json.load(f)
-                    print(f"Debug: Verified existing status file is readable and contains valid JSON")
-                except Exception as e:
-                    print(f"Error: Existing status file is invalid: {e}")
+                    {
+                        "type": "directory",
+                        "start_time": (datetime.now() - timedelta(hours=6)).isoformat(),
+                        "end_time": (datetime.now() - timedelta(hours=5, minutes=30)).isoformat(),
+                        "status": "completed",
+                        "size": 800000000,
+                        "files": 80
+                    }
+                ]
+            }
+            try:
+                with open(self.status_file, 'w') as f:
+                    json.dump(sample_status, f, indent=2)
+                print(f"Debug: Created fresh status file at {self.status_file}")
+                # Verify the file was created and is readable
+                with open(self.status_file, 'r') as f:
+                    data = json.load(f)
+                print(f"Debug: Verified status file is readable and contains valid JSON")
+                print(f"Debug: Status file contents: {json.dumps(data, indent=2)}")
+            except Exception as e:
+                print(f"Error: Failed to create/verify status file: {e}")
             
             super().__init__(*args, status_file=self.status_file)
     
