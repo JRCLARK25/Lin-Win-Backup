@@ -1,329 +1,220 @@
-# Lin-Win-Backup: Step-by-Step Guide
-
-This guide will walk you through the installation, configuration, and usage of Lin-Win-Backup for both Windows and Linux systems.
-
-## Table of Contents
-
-1. [Installation](#installation)
-2. [Basic Configuration](#basic-configuration)
-3. [Remote Backup Setup](#remote-backup-setup)
-4. [Creating Backups](#creating-backups)
-5. [Managing Backups](#managing-backups)
-6. [Restoring from Backups](#restoring-from-backups)
-7. [Scheduling Backups](#scheduling-backups)
-8. [Monitoring Backups](#monitoring-backups)
-9. [Troubleshooting](#troubleshooting)
-
-## Installation
-
-### Step 1: Clone the Repository
-
-```bash
-git clone https://github.com/yourusername/Lin-Win-Backup.git
-cd Lin-Win-Backup
-```
-
-### Step 2: Install Dependencies
-
-#### On Linux:
-```bash
-# Install system dependencies
-sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-dev
-
-# Install Python packages
-pip3 install -r requirements.txt
-```
-
-#### On Windows:
-```bash
-# Install Python if not already installed
-# Download from https://www.python.org/downloads/
-
-# Install Python packages
-pip install -r requirements.txt
-```
-
-## Basic Configuration
-
-### Step 1: Create Configuration File
-
-```bash
-cp .env.example .env
-```
-
-### Step 2: Edit Configuration File
-
-Open the `.env` file in your preferred text editor and configure the following settings:
-
-```
-# Backup Settings
-COMPRESSION_LEVEL=6
-ENCRYPTION_ENABLED=false
-ENCRYPTION_KEY=
-RETENTION_DAYS=30
-
-# Paths
-BACKUP_DIR=/path/to/backup/directory
-TEMP_DIR=/path/to/temp/directory
-LOG_DIR=/path/to/log/directory
-
-# Exclusions
-EXCLUDE_PATTERNS=*.tmp,*.log,*.cache
-```
-
-Replace the paths with your preferred locations. For Windows, use backslashes or escaped forward slashes:
-```
-BACKUP_DIR=C:\\Users\\YourUsername\\Backups
-```
-
-## Remote Backup Setup
-
-### Step 1: Generate SSH Key (if you don't have one)
-
-```bash
-ssh-keygen -t rsa -b 4096
-# Press Enter to save in default location
-# Enter a passphrase or press Enter for no passphrase
-```
-
-### Step 2: Copy SSH Key to Backup Server
-
-```bash
-ssh-copy-id backup_user@backup_server_ip
-# Enter your password when prompted
-```
-
-### Step 3: Configure Remote Backup Settings
-
-Edit the `.env` file to add remote backup configuration:
-
-```
-# Remote Backup Settings
-BACKUP_SERVER_IP=192.168.1.100
-BACKUP_SERVER_PORT=22
-BACKUP_SERVER_USER=backup_user
-BACKUP_SERVER_PATH=/backup/storage
-BACKUP_SERVER_SSH_KEY=/path/to/ssh/private/key
-```
-
-Replace the values with your actual server information.
-
-## Creating Backups
-
-### Step 1: Create a Full Backup
-
-```bash
-# On Linux - using default backup directory from .env
-python3 lin_win_backup.py --type full
-
-# On Linux - with custom destination
-python3 lin_win_backup.py --type full --destination /path/to/backup
-
-# On Windows - using default backup directory from .env
-python lin_win_backup.py --type full
-
-# On Windows - with custom destination
-python lin_win_backup.py --type full --destination C:\path\to\backup
-```
-
-### Step 2: Create an Incremental Backup
-
-```bash
-# On Linux - using default backup directory from .env
-python3 lin_win_backup.py --type incremental
-
-# On Linux - with custom destination
-python3 lin_win_backup.py --type incremental --destination /path/to/backup
-
-# On Windows - using default backup directory from .env
-python lin_win_backup.py --type incremental
-
-# On Windows - with custom destination
-python lin_win_backup.py --type incremental --destination C:\path\to\backup
-```
-
-### Step 3: Create a Bootable ISO from a Backup
-
-```bash
-# On Linux - using default backup directory from .env
-python3 lin_win_backup.py --type full --create-iso
-
-# On Linux - with custom destination and output ISO
-python3 lin_win_backup.py --type full --destination /path/to/backup --create-iso --output-iso /path/to/output.iso
-
-# On Windows - using default backup directory from .env
-python lin_win_backup.py --type full --create-iso
-
-# On Windows - with custom destination and output ISO
-python lin_win_backup.py --type full --destination C:\path\to\backup --create-iso --output-iso C:\path\to\output.iso
-```
-
-## Managing Backups
-
-### Step 1: List All Backups
-
-```bash
-# List local backups
-python linwin.py list
-
-# List remote backups
-python linwin.py list --remote
-```
-
-### Step 2: View Backup Details
-
-```bash
-# View local backup details
-python linwin.py details full_backup_20240315_020000
-
-# View remote backup details
-python linwin.py details full_backup_20240315_020000 --remote
-```
-
-### Step 3: Monitor In-Progress Backups
-
-```bash
-# Check local in-progress backups
-python linwin.py progress
-
-# Check remote in-progress backups
-python linwin.py progress --remote
-```
-
-### Step 4: Delete a Backup
-
-```bash
-# Delete a local backup
-python linwin.py delete full_backup_20240315_020000
-
-# Delete a remote backup
-python linwin.py delete full_backup_20240315_020000 --remote
-
-# Force delete without confirmation
-python linwin.py delete full_backup_20240315_020000 --force
-```
-
-### Step 5: Check Storage Usage
-
-```bash
-# Check local storage usage
-python linwin.py usage
-
-# Check remote storage usage
-python linwin.py usage --remote
-```
-
-## Restoring from Backups
-
-### Step 1: List Available Backups
-
-```bash
-python linwin.py list
-```
-
-### Step 2: Restore from a Backup
-
-```bash
-# On Linux
-python3 lin_win_backup.py --type restore --backup /path/to/backup
-
-# On Windows
-python lin_win_backup.py --type restore --backup C:\path\to\backup
-```
-
-## Scheduling Backups
-
-### Step 1: Install the Agent as a Service
-
-#### On Linux:
-```bash
-sudo python3 install_service.py --backup-dir /path/to/backup
-```
-
-#### On Windows:
-```bash
-python install_service.py --backup-dir C:\path\to\backup
-```
-
-### Step 2: Configure Backup Schedule
-
-Edit the `.env` file to add scheduling configuration:
-
-```
-# Scheduling
-SCHEDULE_FULL_BACKUP=0 0 * * 0  # Every Sunday at midnight
-SCHEDULE_INCREMENTAL_BACKUP=0 0 * * 1-6  # Every day except Sunday at midnight
-```
-
-### Step 3: Start the Agent
-
-```bash
-# On Linux
-sudo systemctl start linwin-backup-agent
-
-# On Windows
-net start LinWinBackupAgent
-```
-
-## Monitoring Backups
-
-### Step 1: Start the Web Interface
-
-```bash
-# On Linux
-python3 web_interface.py --backup-dir /path/to/backup
-
-# On Windows
-python web_interface.py --backup-dir C:\path\to\backup
-```
-
-### Step 2: Access the Web Interface
-
-Open your web browser and navigate to:
-```
-http://localhost:8080
-```
-
-The web interface provides real-time monitoring of:
-- Agent status
-- Current backup progress
-- Next scheduled backup
-- Disk usage
-- Backup history
+# Lin-Win-Backup Setup Guide
+
+## Overview
+Lin-Win-Backup is a secure backup solution that allows you to back up files from Linux clients to a Windows server. This guide will walk you through the setup process for both the server and client components.
+
+## Server Setup
+
+### 1. Prerequisites
+- Windows 10/11 or Windows Server 2019/2022
+- Python 3.8 or higher
+- Git (optional, for cloning the repository)
+
+### 2. Installation
+1. Clone or download the repository:
+   ```bash
+   git clone https://github.com/yourusername/Lin-Win-Backup.git
+   cd Lin-Win-Backup
+   ```
+
+2. Install required Python packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### 3. Server Configuration
+1. Start the server:
+   ```bash
+   python server_web_interface.py
+   ```
+   The server will start on port 3000 by default.
+
+2. Access the web interface:
+   - Open a web browser and navigate to `http://localhost:3000`
+   - Default login credentials:
+     - Username: `admin`
+     - Password: `admin`
+   - **Important**: Change the default password after first login
+
+3. Server Security Settings:
+   - The server will automatically generate encryption keys on first run
+   - Keys are stored in `~/Lin-Win-Backup/keys/server/`
+   - Keep these keys secure and backed up
+
+## Client Setup
+
+### 1. Prerequisites
+- Linux system (tested on Ubuntu 20.04+, Debian 10+, CentOS 8+)
+- Python 3.8 or higher
+- Git (optional, for cloning the repository)
+
+### 2. Installation
+1. Clone or download the repository:
+   ```bash
+   git clone https://github.com/yourusername/Lin-Win-Backup.git
+   cd Lin-Win-Backup
+   ```
+
+2. Install required Python packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### 3. Client Configuration
+1. Use the client configuration tool to set up the client:
+   ```bash
+   python client_config_tool.py
+   ```
+
+2. Basic Setup Steps:
+   a. Set the server URL:
+      ```bash
+      python client_config_tool.py server --url http://your-server-ip:3000
+      ```
+
+   b. Add authorized server IP/subnet:
+      ```bash
+      python client_config_tool.py server --add-authorized 192.168.1.0/24
+      ```
+
+   c. Set a friendly name for the client:
+      ```bash
+      python client_config_tool.py client --name "My Linux Server"
+      ```
+
+   d. Add directories to backup:
+      ```bash
+      python client_config_tool.py client --add-dir /path/to/backup
+      ```
+
+   e. Configure backup settings:
+      ```bash
+      # Set maximum backup size (in MB)
+      python client_config_tool.py backup --max-size 1000
+
+      # Set retention days
+      python client_config_tool.py backup --retention 30
+
+      # Enable encryption
+      python client_config_tool.py backup --encryption on
+
+      # Enable compression
+      python client_config_tool.py backup --compression on
+      ```
+
+   f. Configure logging:
+      ```bash
+      # Set log level
+      python client_config_tool.py log --level INFO
+
+      # Set log file path
+      python client_config_tool.py log --file /var/log/backup.log
+      ```
+
+3. Register with the server:
+   ```bash
+   python client_config_tool.py register
+   ```
+
+### 4. Security Considerations
+1. Server Authorization:
+   - Only add server IPs/subnets that you trust
+   - Use specific IPs instead of broad subnets when possible
+   - Regularly review and update authorized servers list
+
+2. Encryption:
+   - Encryption is enabled by default
+   - Keys are stored in `~/Lin-Win-Backup/keys/client/`
+   - Keep these keys secure and backed up
+
+3. Network Security:
+   - Use HTTPS if exposing the server to the internet
+   - Consider using a VPN for remote backups
+   - Restrict server access to trusted networks
+
+4. Access Control:
+   - Change default admin password immediately
+   - Use strong passwords
+   - Regularly rotate credentials
+
+## Backup Process
+
+### 1. Manual Backup
+1. From the server web interface:
+   - Log in to the dashboard
+   - Select a client
+   - Click "Start Backup"
+
+2. From the client:
+   - Use the client API to initiate a backup
+   - Monitor progress in the logs
+
+### 2. Scheduled Backups
+1. From the server web interface:
+   - Log in to the dashboard
+   - Select a client
+   - Click "Create Schedule"
+   - Set backup frequency and time
+
+2. The client will automatically:
+   - Check for scheduled backups
+   - Execute backups at the specified time
+   - Report results to the server
+
+## Monitoring and Maintenance
+
+### 1. Logs
+- Server logs: `~/Lin-Win-Backup/logs/server.log`
+- Client logs: Configured location (default: `~/Lin-Win-Backup/logs/client.log`)
+
+### 2. Backup History
+- View backup history in the server web interface
+- Check backup status and details
+- Monitor storage usage
+
+### 3. Security Audits
+- Regularly review authorized servers
+- Check for unauthorized access attempts
+- Update security settings as needed
 
 ## Troubleshooting
 
-### Common Issues and Solutions
+### Common Issues
+1. Connection Problems:
+   - Verify server URL is correct
+   - Check network connectivity
+   - Ensure server is authorized
 
-#### Issue: Permission Denied
-**Solution:** Run the command with administrative privileges (sudo on Linux, Run as Administrator on Windows)
+2. Backup Failures:
+   - Check disk space
+   - Verify file permissions
+   - Review logs for errors
 
-#### Issue: SSH Connection Failed
-**Solution:** 
-1. Verify the server IP and port are correct
-2. Check that your SSH key is properly set up
-3. Ensure the backup server is running and accessible
-
-#### Issue: Backup Process Hangs
-**Solution:**
-1. Check the logs in the LOG_DIR
-2. Verify there's enough disk space
-3. Check for network connectivity issues
-
-#### Issue: Agent Service Not Starting
-**Solution:**
-1. Check the service logs
-2. Verify the configuration file is correct
-3. Ensure the backup directory exists and is accessible
+3. Security Issues:
+   - Verify encryption keys
+   - Check authorization settings
+   - Review access logs
 
 ### Getting Help
+- Check the logs for detailed error messages
+- Review the documentation
+- Submit issues on GitHub
 
-If you encounter issues not covered in this guide:
-1. Check the logs in the LOG_DIR
-2. Review the README.md file for additional information
-3. Submit an issue on the GitHub repository
+## Best Practices
+1. Security:
+   - Regularly update passwords
+   - Monitor access logs
+   - Keep software updated
+   - Use encryption for all backups
 
----
+2. Backup Strategy:
+   - Test backups regularly
+   - Maintain multiple backup copies
+   - Monitor storage usage
+   - Set appropriate retention periods
 
-This guide covers the basic setup and usage of Lin-Win-Backup. For advanced features and options, refer to the README.md file. 
+3. Network:
+   - Use secure connections
+   - Limit server exposure
+   - Monitor network traffic
+   - Use firewalls appropriately 

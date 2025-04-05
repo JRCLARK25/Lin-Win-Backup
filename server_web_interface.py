@@ -285,6 +285,30 @@ DASHBOARD_TEMPLATE = """
             border-radius: 4px;
             cursor: pointer;
         }
+        .add-client-form {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            display: none;
+        }
+        .add-client-btn {
+            background-color: #28a745;
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .form-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .form-group {
+            flex: 1;
+        }
     </style>
 </head>
 <body>
@@ -292,6 +316,26 @@ DASHBOARD_TEMPLATE = """
         <div class="header">
             <h1>Lin-Win-Backup Server Dashboard</h1>
             <button class="logout-btn" onclick="handleLogout()">Logout</button>
+        </div>
+        
+        <button class="add-client-btn" onclick="showAddClientForm()">Add New Client</button>
+        
+        <div id="add-client-form" class="add-client-form">
+            <h3>Add New Client</h3>
+            <form onsubmit="return handleAddClient(event)">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="client-ip">Client IP Address:</label>
+                        <input type="text" id="client-ip" required pattern="^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$" placeholder="192.168.1.100">
+                    </div>
+                    <div class="form-group">
+                        <label for="client-name">Friendly Name (optional):</label>
+                        <input type="text" id="client-name" placeholder="e.g., Office PC">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-success">Add Client</button>
+                <button type="button" class="btn btn-danger" onclick="hideAddClientForm()">Cancel</button>
+            </form>
         </div>
         
         <div class="client-selector">
@@ -558,6 +602,51 @@ DASHBOARD_TEMPLATE = """
             }
         }
         
+        function showAddClientForm() {
+            document.getElementById('add-client-form').style.display = 'block';
+        }
+        
+        function hideAddClientForm() {
+            document.getElementById('add-client-form').style.display = 'none';
+            document.getElementById('client-ip').value = '';
+            document.getElementById('client-name').value = '';
+        }
+        
+        async function handleAddClient(event) {
+            event.preventDefault();
+            
+            const ip = document.getElementById('client-ip').value;
+            const friendlyName = document.getElementById('client-name').value;
+            
+            try {
+                const response = await fetch('/api/add_client', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        ip: ip,
+                        friendly_name: friendlyName
+                    }),
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    hideAddClientForm();
+                    loadClients(); // Refresh the client list
+                    alert('Client added successfully!');
+                } else {
+                    alert(data.error || 'Failed to add client');
+                }
+            } catch (error) {
+                console.error('Error adding client:', error);
+                alert('An error occurred while adding the client');
+            }
+            
+            return false;
+        }
+        
         // Initial load
         loadClients();
     </script>
@@ -653,6 +742,11 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         # API endpoints
         if path == '/api/register_client':
             self._handle_register_client(data)
+        elif path == '/api/add_client':
+            if not self._check_auth():
+                self._send_error(401, "Unauthorized")
+                return
+            self._handle_add_client(data)
         elif path.startswith('/api/client/'):
             if not self._check_auth():
                 self._send_error(401, "Unauthorized")
@@ -972,6 +1066,70 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             client_data = clients[client_id]
             client_data['id'] = client_id
             self._send_json_response(client_data)
+        except Exception as e:
+            self._send_error(500, str(e))
+
+    def _handle_add_client(self, data):
+        """Handle adding a new client manually"""
+        try:
+            ip = data.get('ip')
+            friendly_name = data.get('friendly_name', '')
+            
+            if not ip:
+                self._send_error(400, "IP address is required")
+                return
+            
+            # Validate IP address format
+            try:
+                socket.inet_aton(ip)
+            except socket.error:
+                self._send_error(400, "Invalid IP address format")
+                return
+            
+            # Try to get hostname from IP
+            try:
+                hostname = socket.gethostbyaddr(ip)[0]
+            except (socket.herror, socket.gaierror):
+                hostname = ip
+            
+            # Generate a client ID
+            client_id = f"client_{hashlib.md5(f"{ip}_{hostname}".encode()).hexdigest()[:8]}"
+            
+            # Load existing clients
+            clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
+            clients = {}
+            if os.path.exists(clients_file):
+                with open(clients_file, 'r') as f:
+                    clients = json.load(f)
+            
+            # Check if client already exists
+            if client_id in clients:
+                self._send_error(400, "Client already exists")
+                return
+            
+            # Add new client
+            clients[client_id] = {
+                'hostname': hostname,
+                'friendly_name': friendly_name,
+                'ip': ip,
+                'system': 'Unknown',  # Will be updated when client connects
+                'version': 'Unknown',  # Will be updated when client connects
+                'last_seen': datetime.now().isoformat(),
+                'current_backup': None,
+                'next_scheduled': None,
+                'backup_history': []
+            }
+            
+            # Save updated clients
+            with open(clients_file, 'w') as f:
+                json.dump(clients, f, indent=2)
+            
+            self._send_json_response({
+                'status': 'success',
+                'client_id': client_id,
+                'message': 'Client added successfully'
+            })
+            
         except Exception as e:
             self._send_error(500, str(e))
 

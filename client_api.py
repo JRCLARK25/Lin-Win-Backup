@@ -1,179 +1,251 @@
 #!/usr/bin/env python3
 import os
 import json
-import requests
-import base64
 import socket
 import platform
 import uuid
-from pathlib import Path
+import requests
+import hashlib
+import base64
+import time
 from datetime import datetime
-from cryptography.hazmat.primitives import serialization
+import psutil
+from loguru import logger
 from encryption_utils import EncryptionManager
+from client_config import ClientConfig
 
 class ClientAPI:
-    def __init__(self, server_url, client_id=None, keys_dir=None):
-        self.server_url = server_url.rstrip('/')
-        self.client_id = client_id or self._generate_client_id()
-        self.keys_dir = keys_dir or os.path.expanduser(f"~/Lin-Win-Backup/keys/clients/{self.client_id}")
+    """Client API for communicating with the backup server"""
+    
+    def __init__(self, server_url=None, client_id=None, keys_dir=None, config_dir=None):
+        """Initialize the client API"""
+        # Load client configuration
+        self.config = ClientConfig(config_dir)
         
-        # Create keys directory if it doesn't exist
-        os.makedirs(self.keys_dir, exist_ok=True)
+        # Set server URL from config if not provided
+        if server_url is None:
+            server_url = self.config.get_server_url()
+        
+        self.server_url = server_url
+        self.client_id = client_id or self._generate_client_id()
+        self.keys_dir = keys_dir or os.path.expanduser('~/Lin-Win-Backup/keys/client')
         
         # Initialize encryption manager
-        self.encryption = EncryptionManager()
+        self.encryption = self._load_or_generate_keys()
         
-        # Load or generate client keys
-        self._load_or_generate_keys()
+        # Set up logging
+        log_level = self.config.get_log_level()
+        log_file = self.config.get_log_file()
+        logger.remove()  # Remove default handler
+        logger.add(log_file, level=log_level)
+        logger.add(lambda msg: print(msg), level=log_level)  # Also print to console
     
     def _generate_client_id(self):
         """Generate a unique client ID based on hostname and MAC address"""
         hostname = socket.gethostname()
-        mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) for elements in range(0, 2*6, 2)][::-1])
-        return f"{hostname}-{mac}"
+        mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) for elements in range(0, 2 * 6, 2)][::-1])
+        return f"client_{hashlib.md5(f"{hostname}_{mac}".encode()).hexdigest()[:8]}"
     
     def _load_or_generate_keys(self):
-        """Load existing client keys or generate new ones"""
-        private_key_file = os.path.join(self.keys_dir, "private_key.pem")
-        public_key_file = os.path.join(self.keys_dir, "public_key.pem")
+        """Load existing keys or generate new ones"""
+        os.makedirs(self.keys_dir, exist_ok=True)
         
-        if os.path.exists(private_key_file) and os.path.exists(public_key_file):
+        encryption = EncryptionManager()
+        
+        # Check if keys already exist
+        private_key_path = os.path.join(self.keys_dir, 'private_key.pem')
+        public_key_path = os.path.join(self.keys_dir, 'public_key.pem')
+        
+        if os.path.exists(private_key_path) and os.path.exists(public_key_path):
             # Load existing keys
-            with open(private_key_file, 'rb') as f:
-                self.private_key = serialization.load_pem_private_key(
-                    f.read(),
-                    password=None
-                )
-            with open(public_key_file, 'rb') as f:
-                self.public_key = serialization.load_pem_public_key(f.read())
+            encryption.load_keys(private_key_path, public_key_path)
         else:
             # Generate new keys
-            keys = self.encryption.generate_client_key(self.client_id)
-            with open(keys['private_key'], 'rb') as f:
-                self.private_key = serialization.load_pem_private_key(
-                    f.read(),
-                    password=None
-                )
-            with open(keys['public_key'], 'rb') as f:
-                self.public_key = serialization.load_pem_public_key(f.read())
+            encryption.generate_keys()
+            encryption.save_keys(private_key_path, public_key_path)
+        
+        return encryption
+    
+    def _check_server_authorization(self, server_url):
+        """Check if the server is authorized"""
+        try:
+            # Extract hostname and IP from server URL
+            from urllib.parse import urlparse
+            parsed_url = urlparse(server_url)
+            hostname = parsed_url.hostname
+            
+            # Try to resolve IP from hostname
+            try:
+                ip = socket.gethostbyname(hostname)
+            except socket.gaierror:
+                ip = hostname  # If hostname is already an IP
+            
+            # Check if server is authorized
+            if not self.config.is_server_authorized(ip, hostname):
+                logger.warning(f"Server {server_url} is not authorized. Adding to authorized servers.")
+                self.config.add_authorized_server(server_ip=ip, hostname=hostname)
+                self.config.save()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error checking server authorization: {e}")
+            return False
     
     def register_with_server(self):
         """Register this client with the server"""
+        if not self.server_url:
+            logger.error("Server URL not set")
+            return False
+        
+        if not self._check_server_authorization(self.server_url):
+            logger.error("Server is not authorized")
+            return False
+        
         try:
             # Get server's public key
             response = requests.get(f"{self.server_url}/api/public_key")
             if response.status_code != 200:
-                print(f"Error getting server public key: {response.text}")
+                logger.error(f"Failed to get server public key: {response.text}")
                 return False
             
-            server_public_key_pem = response.json()['public_key']
+            server_public_key = response.json()['public_key']
             
-            # Register client with server
-            client_public_key_pem = self.public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            ).decode()
+            # Get client's public key
+            client_public_key = self.encryption.get_public_key_pem()
             
-            response = requests.post(
-                f"{self.server_url}/api/register_client",
-                json={
-                    'client_id': self.client_id,
-                    'public_key': client_public_key_pem,
-                    'hostname': socket.gethostname(),
-                    'system': platform.system(),
-                    'version': platform.version()
-                }
-            )
+            # Get system information
+            system_info = self.get_system_info()
             
+            # Register client
+            data = {
+                'client_id': self.client_id,
+                'public_key': client_public_key,
+                'hostname': socket.gethostname(),
+                'system': system_info['system'],
+                'version': system_info['version']
+            }
+            
+            response = requests.post(f"{self.server_url}/api/register_client", json=data)
             if response.status_code != 200:
-                print(f"Error registering with server: {response.text}")
+                logger.error(f"Failed to register client: {response.text}")
                 return False
             
-            print(f"Successfully registered with server as {self.client_id}")
+            logger.info("Successfully registered with server")
             return True
         except Exception as e:
-            print(f"Error registering with server: {e}")
+            logger.error(f"Error registering with server: {e}")
             return False
     
     def send_status_update(self, status_data):
-        """Send a status update to the server"""
+        """Send status update to server"""
+        if not self.server_url:
+            logger.error("Server URL not set")
+            return False
+        
+        if not self._check_server_authorization(self.server_url):
+            logger.error("Server is not authorized")
+            return False
+        
         try:
-            # Encrypt the status data
-            encrypted_data = self.encryption.encrypt_for_client(self.client_id, json.dumps(status_data))
+            # Encrypt status data
+            encrypted_data = self.encryption.encrypt_for_server(status_data)
             
-            # Send the encrypted data to the server
-            response = requests.post(
-                f"{self.server_url}/api/client/{self.client_id}/status",
-                json={'encrypted_data': encrypted_data}
-            )
+            # Send to server
+            data = {
+                'encrypted_data': encrypted_data
+            }
             
+            response = requests.post(f"{self.server_url}/api/client/{self.client_id}/status", json=data)
             if response.status_code != 200:
-                print(f"Error sending status update: {response.text}")
+                logger.error(f"Failed to send status update: {response.text}")
                 return False
             
+            logger.info("Successfully sent status update")
             return True
         except Exception as e:
-            print(f"Error sending status update: {e}")
+            logger.error(f"Error sending status update: {e}")
             return False
     
     def get_schedule(self):
-        """Get the backup schedule from the server"""
+        """Get backup schedule from server"""
+        if not self.server_url:
+            logger.error("Server URL not set")
+            return None
+        
+        if not self._check_server_authorization(self.server_url):
+            logger.error("Server is not authorized")
+            return None
+        
         try:
-            response = requests.get(f"{self.server_url}/api/client/{self.client_id}/schedule")
-            
+            # Get encrypted schedule
+            response = requests.get(f"{self.server_url}/api/client/{this.client_id}/schedule")
             if response.status_code != 200:
-                print(f"Error getting schedule: {response.text}")
+                logger.error(f"Failed to get schedule: {response.text}")
                 return None
             
-            # Decrypt the schedule data
             encrypted_data = response.json()['encrypted_data']
-            decrypted_data = self.encryption.decrypt_from_client(encrypted_data)
             
+            # Decrypt schedule
+            decrypted_data = self.encryption.decrypt_from_server(encrypted_data)
             if decrypted_data is None:
-                print("Error decrypting schedule data")
+                logger.error("Failed to decrypt schedule")
                 return None
             
-            return json.loads(decrypted_data)
+            schedule = json.loads(decrypted_data)
+            logger.info("Successfully retrieved schedule")
+            return schedule
         except Exception as e:
-            print(f"Error getting schedule: {e}")
+            logger.error(f"Error getting schedule: {e}")
             return None
     
     def report_backup_result(self, backup_id, result_data):
-        """Report the result of a backup to the server"""
+        """Report backup result to server"""
+        if not self.server_url:
+            logger.error("Server URL not set")
+            return False
+        
+        if not this._check_server_authorization(self.server_url):
+            logger.error("Server is not authorized")
+            return False
+        
         try:
-            # Encrypt the result data
-            encrypted_data = self.encryption.encrypt_for_client(self.client_id, json.dumps(result_data))
+            # Encrypt result data
+            encrypted_data = this.encryption.encrypt_for_server(result_data)
             
-            # Send the encrypted data to the server
-            response = requests.post(
-                f"{self.server_url}/api/client/{self.client_id}/backup/{backup_id}/result",
-                json={'encrypted_data': encrypted_data}
-            )
+            # Send to server
+            data = {
+                'encrypted_data': encrypted_data
+            }
             
+            response = requests.post(f"{this.server_url}/api/client/{this.client_id}/backup/{backup_id}/result", json=data)
             if response.status_code != 200:
-                print(f"Error reporting backup result: {response.text}")
+                logger.error(f"Failed to report backup result: {response.text}")
                 return False
             
+            logger.info("Successfully reported backup result")
             return True
         except Exception as e:
-            print(f"Error reporting backup result: {e}")
+            logger.error(f"Error reporting backup result: {e}")
             return False
     
     def get_system_info(self):
-        """Get system information for status updates"""
+        """Get system information"""
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        machine = platform.machine()
+        
         return {
+            'system': f"{system} {release} ({machine})",
+            'version': version,
             'hostname': socket.gethostname(),
-            'system': platform.system(),
-            'version': platform.version(),
-            'machine': platform.machine(),
-            'processor': platform.processor(),
-            'python_version': platform.python_version()
+            'python_version': platform.python_version(),
+            'timestamp': datetime.now().isoformat()
         }
     
     def get_disk_usage(self, path='/'):
         """Get disk usage information"""
         try:
-            import psutil
             usage = psutil.disk_usage(path)
             return {
                 'total': usage.total,
@@ -181,9 +253,101 @@ class ClientAPI:
                 'free': usage.free,
                 'percent': usage.percent
             }
-        except ImportError:
-            print("psutil module not installed. Install it with: pip install psutil")
-            return None
         except Exception as e:
-            print(f"Error getting disk usage: {e}")
-            return None 
+            logger.error(f"Error getting disk usage: {e}")
+            return None
+    
+    def get_backup_dirs(self):
+        """Get directories to backup from config"""
+        return self.config.get_all_config().get('backup_dirs', [])
+    
+    def get_exclude_patterns(self):
+        """Get exclude patterns from config"""
+        return self.config.get_all_config().get('exclude_patterns', [])
+    
+    def is_encryption_enabled(self):
+        """Check if encryption is enabled"""
+        return self.config.is_encryption_enabled()
+    
+    def is_compression_enabled(self):
+        """Check if compression is enabled"""
+        return self.config.is_compression_enabled()
+    
+    def get_max_backup_size(self):
+        """Get maximum backup size"""
+        return self.config.get_max_backup_size()
+    
+    def get_retention_days(self):
+        """Get retention days"""
+        return self.config.get_retention_days()
+    
+    def add_authorized_server(self, server_ip=None, subnet=None, hostname=None):
+        """Add an authorized server"""
+        self.config.add_authorized_server(server_ip, subnet, hostname)
+    
+    def remove_authorized_server(self, server_ip=None, subnet=None, hostname=None):
+        """Remove an authorized server"""
+        self.config.remove_authorized_server(server_ip, subnet, hostname)
+    
+    def set_server_url(self, url):
+        """Set the server URL"""
+        self.config.set_server_url(url)
+        self.server_url = url
+    
+    def set_client_name(self, name):
+        """Set the client name"""
+        self.config.set_client_name(name)
+    
+    def add_backup_dir(self, directory):
+        """Add a directory to backup"""
+        self.config.add_backup_dir(directory)
+    
+    def remove_backup_dir(self, directory):
+        """Remove a directory from backup"""
+        self.config.remove_backup_dir(directory)
+    
+    def add_exclude_pattern(self, pattern):
+        """Add an exclude pattern"""
+        self.config.add_exclude_pattern(pattern)
+    
+    def remove_exclude_pattern(self, pattern):
+        """Remove an exclude pattern"""
+        self.config.remove_exclude_pattern(pattern)
+    
+    def set_max_backup_size(self, size_bytes):
+        """Set the maximum backup size in bytes"""
+        self.config.set_max_backup_size(size_bytes)
+    
+    def set_retention_days(self, days):
+        """Set the number of days to keep backups"""
+        self.config.set_retention_days(days)
+    
+    def set_encryption_enabled(self, enabled):
+        """Set whether encryption is enabled"""
+        self.config.set_encryption_enabled(enabled)
+    
+    def set_compression_enabled(self, enabled):
+        """Set whether compression is enabled"""
+        self.config.set_compression_enabled(enabled)
+    
+    def set_log_level(self, level):
+        """Set the logging level"""
+        self.config.set_log_level(level)
+        logger.remove()
+        logger.add(self.config.get_log_file(), level=level)
+        logger.add(lambda msg: print(msg), level=level)
+    
+    def set_log_file(self, log_file):
+        """Set the log file path"""
+        self.config.set_log_file(log_file)
+        logger.remove()
+        logger.add(log_file, level=self.config.get_log_level())
+        logger.add(lambda msg: print(msg), level=self.config.get_log_level())
+    
+    def get_all_config(self):
+        """Get the entire configuration"""
+        return self.config.get_all_config()
+    
+    def update_config(self, new_config):
+        """Update the configuration with new values"""
+        self.config.update_config(new_config) 
