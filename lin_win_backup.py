@@ -27,10 +27,23 @@ EXCLUDE_PATTERNS = BACKUP_CONFIG['exclude_patterns']
 class BackupManager:
     def __init__(self, destination_path):
         self.destination_path = Path(destination_path)
-        self.system = platform.system()
-        self.backup_metadata = {}
-        self.setup_logging()
+        self.system = "Linux" if sys.platform != "win32" else "Windows"
+        self.remote_backup_enabled = bool(REMOTE_CONFIG.get('server_ip'))
+        self.remote_backup_successful = False
         
+        # Initialize remote backup if enabled
+        if self.remote_backup_enabled:
+            try:
+                self.remote_backup = RemoteBackup()
+                if self.remote_backup.connect():
+                    print("Successfully connected to remote backup server")
+                else:
+                    print("Could not connect to remote server - will create local backup only")
+                    self.remote_backup = None
+            except Exception as e:
+                print(f"Remote backup initialization failed: {e}")
+                self.remote_backup = None
+
     def setup_logging(self):
         logger.add("backup.log", rotation="1 day", retention="7 days")
         
@@ -51,159 +64,102 @@ class BackupManager:
                     partitions.append(partition)
         return partitions
 
-    def _backup_linux_partition(self, partition, backup_dir):
+    def _backup_linux_partition(self, partition, backup_dir, verbose=False):
         """Backup a Linux partition"""
-        logger.info(f"Backing up Linux partition: {partition.mountpoint}")
-        print(f"Starting backup of partition: {partition.mountpoint}")
+        if verbose:
+            print(f"Backing up partition: {partition.mountpoint}")
         
-        # Create a directory for this partition in the backup
-        partition_backup_dir = backup_dir / partition.mountpoint.replace('/', '_')
-        partition_backup_dir.mkdir(exist_ok=True)
+        # Create partition directory
+        partition_dir = backup_dir / partition.mountpoint.replace('/', '_').replace('\\', '_')
+        partition_dir.mkdir(exist_ok=True)
         
-        # Create a tar archive of the partition
-        archive_path = partition_backup_dir / f"{partition.mountpoint.replace('/', '_')}.tar.gz"
-        
-        # Additional directories to exclude for Linux
-        linux_exclude_dirs = [
-            '/proc', 
-            '/sys', 
-            '/dev', 
-            '/run', 
-            '/tmp',
-            '/var/tmp',
-            '/var/cache',
-            '/var/log',
-            '/lost+found',
-            '/mnt',
-            '/media',
-            '/boot',
-            '/swap',
-            '/swapfile',
-            '~/Lin-Win-Backup/backups/'
-        ]
-        
-        # Additional files to exclude for Linux
-        linux_exclude_files = [
-            'swapfile',
-            '*.swp',
-            '*.swap',
-            '*.tmp',
-            '*.log',
-            '*.cache',
-            '.cache',
-            '.thumbnails'
-        ]
-        
-        # Combine with existing exclude patterns
-        all_exclude_dirs = linux_exclude_dirs + [p for p in EXCLUDE_PATTERNS if p.startswith('/')]
-        all_exclude_files = linux_exclude_files + [p for p in EXCLUDE_PATTERNS if not p.startswith('/')]
+        # Create archive
+        archive_path = partition_dir / f"{partition.mountpoint.replace('/', '_').replace('\\', '_')}.tar.gz"
         
         # Count stats
         files_processed = 0
         files_skipped = 0
         dirs_skipped = 0
         total_size = 0
+        start_time = time.time()
+        
+        # Get total size for progress calculation
+        total_files = sum([len(files) for _, _, files in os.walk(partition.mountpoint)])
+        processed_files = 0
         
         # Status update interval (seconds)
         status_interval = 5
         last_status_time = time.time()
-        current_directory = ""
         
         with tarfile.open(archive_path, 'w:gz') as tar:
             # Walk through the partition directory
             for root, dirs, files in os.walk(partition.mountpoint):
-                # Show current directory being processed (periodically)
+                # Show progress
                 if time.time() - last_status_time > status_interval:
-                    print(f"Processing: {root} | Files: {files_processed:,} processed, {files_skipped:,} skipped | Size: {total_size / (1024*1024):.2f} MB")
-                    last_status_time = time.time()
+                    elapsed_time = time.time() - start_time
+                    progress = (processed_files / total_files) * 100 if total_files > 0 else 0
+                    if total_files > 0:
+                        eta = (elapsed_time / processed_files) * (total_files - processed_files)
+                        eta_str = f"{eta/60:.1f} minutes" if eta > 60 else f"{eta:.0f} seconds"
+                    else:
+                        eta_str = "calculating..."
                     
-                current_directory = root
-                
-                # Skip excluded directories - more robust check
-                should_skip = False
-                for exclude_dir in all_exclude_dirs:
-                    if root.startswith(exclude_dir) or exclude_dir in root.split('/'):
-                        dirs_skipped += 1
-                        should_skip = True
-                        break
-                
-                if should_skip:
-                    # Remove this directory from dirs list to prevent further walking
-                    dirs.clear()
-                    continue
+                    if verbose:
+                        print(f"Processing: {root} | Files: {files_processed:,} processed, {files_skipped:,} skipped | Size: {format_size(total_size)}")
+                    else:
+                        print(f"\rProgress: {progress:.1f}% | ETA: {eta_str}", end='', flush=True)
+                    last_status_time = time.time()
                 
                 # Show progress for directories with many files
-                if len(files) > 100:
+                if verbose and len(files) > 100:
                     print(f"Found {len(files):,} files in {root}")
                     file_progress = tqdm(files, desc=f"Processing {os.path.basename(root)}", leave=False)
                 else:
                     file_progress = files
-                    
+                
                 for file in file_progress:
                     file_path = os.path.join(root, file)
                     try:
-                        # Skip excluded files based on patterns
-                        should_skip_file = False
-                        for pattern in all_exclude_files:
-                            if pattern.startswith('*') and file.endswith(pattern[1:]):
-                                should_skip_file = True
-                                break
-                            elif file == pattern:
-                                should_skip_file = True
-                                break
-                        
-                        if should_skip_file:
+                        # Skip excluded files
+                        if should_exclude(Path(file_path)):
                             files_skipped += 1
+                            processed_files += 1
                             continue
                         
-                        # Check if we have read access before attempting to read the file
-                        if not os.access(file_path, os.R_OK):
-                            files_skipped += 1
-                            continue
-                            
-                        # Skip files larger than 4GB for now
-                        file_size = os.path.getsize(file_path)
-                        if file_size > 4 * 1024 * 1024 * 1024:
-                            print(f"Skipping large file (>4GB): {file_path}")
-                            files_skipped += 1
-                            continue
-                            
                         # Add file to archive
-                        arcname = os.path.relpath(file_path, partition.mountpoint)
-                        tar.add(file_path, arcname=arcname)
+                        tar.add(file_path, arcname=os.path.relpath(file_path, partition.mountpoint))
                         
-                        # Add to metadata
-                        self.backup_metadata[arcname] = {
-                            'path': file_path,
-                            'size': file_size,
-                            'mtime': os.path.getmtime(file_path)
-                        }
-                        
+                        # Update stats
                         files_processed += 1
-                        total_size += file_size
-                        
+                        processed_files += 1
+                        total_size += os.path.getsize(file_path)
                     except PermissionError:
                         files_skipped += 1
+                        processed_files += 1
                     except Exception as e:
-                        logger.error(f"Error backing up {file_path}: {e}")
+                        logger.error(f"Error processing {file_path}: {e}")
                         files_skipped += 1
+                        processed_files += 1
         
         # Print final summary
-        print(f"\nPartition backup completed: {partition.mountpoint}")
-        print(f"  ✓ Files processed: {files_processed:,}")
-        print(f"  ✓ Files skipped: {files_skipped:,}")
-        print(f"  ✓ Directories skipped: {dirs_skipped:,}")
-        print(f"  ✓ Total data backed up: {total_size / (1024*1024*1024):.2f} GB\n")
+        if verbose:
+            print(f"\nPartition backup completed: {partition.mountpoint}")
+            print(f"  ✓ Files processed: {files_processed:,}")
+            print(f"  ✓ Files skipped: {files_skipped:,}")
+            print(f"  ✓ Directories skipped: {dirs_skipped:,}")
+            print(f"  ✓ Total data backed up: {format_size(total_size)}")
+        else:
+            print(f"\nPartition {partition.mountpoint} completed: {format_size(total_size)}")
         
         logger.info(f"Completed backing up partition: {partition.mountpoint}")
-        logger.info(f"Files processed: {files_processed}, skipped: {files_skipped}, total size: {total_size / (1024*1024):.2f} MB")
-        
+        logger.info(f"Files processed: {files_processed}, skipped: {files_skipped}, total size: {format_size(total_size)}")
+
     def _backup_windows_partition(self, partition, backup_dir):
         """Backup a Windows partition"""
         # This method would be implemented for Windows systems
         pass
 
-    def create_full_backup(self):
+    def create_full_backup(self, verbose=False):
         """Create a full system backup"""
         logger.info("Starting full system backup")
         self.create_backup_directory()
@@ -212,17 +168,56 @@ class BackupManager:
         backup_dir = self.destination_path / f"full_backup_{timestamp}"
         backup_dir.mkdir(exist_ok=True)
         
-        partitions = self.get_system_partitions()
-        for partition in tqdm(partitions, desc="Backing up partitions"):
-            if self.system == "Linux":
-                self._backup_linux_partition(partition, backup_dir)
-            elif self.system == "Windows":
-                self._backup_windows_partition(partition, backup_dir)
-            
-        self._save_metadata(backup_dir)
-        logger.info("Full backup completed successfully")
+        start_time = time.time()
+        total_partitions = len(list(self.get_system_partitions()))
+        processed_partitions = 0
         
-    def create_incremental_backup(self):
+        partitions = self.get_system_partitions()
+        for partition in partitions:
+            processed_partitions += 1
+            if verbose:
+                print(f"\nBacking up partition {processed_partitions}/{total_partitions}: {partition.mountpoint}")
+            else:
+                progress = (processed_partitions / total_partitions) * 100
+                elapsed_time = time.time() - start_time
+                eta = (elapsed_time / processed_partitions) * (total_partitions - processed_partitions)
+                eta_str = f"{eta/60:.1f} minutes" if eta > 60 else f"{eta:.0f} seconds"
+                print(f"\rProgress: {progress:.1f}% | ETA: {eta_str}", end='', flush=True)
+            
+            if self.system == "Linux":
+                self._backup_linux_partition(partition, backup_dir, verbose)
+            elif self.system == "Windows":
+                self._backup_windows_partition(partition, backup_dir, verbose)
+        
+        self._save_metadata(backup_dir)
+        
+        # Try remote backup if enabled
+        if self.remote_backup_enabled and self.remote_backup:
+            try:
+                if verbose:
+                    print(f"\nUploading backup to remote server...")
+                remote_path = os.path.join(REMOTE_CONFIG['server_path'], os.path.basename(str(backup_dir)))
+                self.remote_backup.ensure_remote_directory(REMOTE_CONFIG['server_path'])
+                self.remote_backup.upload_directory(str(backup_dir), remote_path)
+                if verbose:
+                    print(f"✓ Backup successfully uploaded to remote server")
+                self.remote_backup_successful = True
+            except Exception as e:
+                if verbose:
+                    print(f"× Failed to upload backup to remote server: {str(e)}")
+                self.remote_backup_successful = False
+            finally:
+                self.remote_backup.disconnect()
+        
+        if verbose:
+            print(f"\nFull backup completed successfully")
+        else:
+            print(f"\nBackup completed successfully")
+        
+        logger.info("Full backup completed successfully")
+        return str(backup_dir)
+
+    def create_incremental_backup(self, verbose=False):
         """Create an incremental backup"""
         logger.info("Starting incremental backup")
         self.create_backup_directory()
@@ -230,17 +225,63 @@ class BackupManager:
         # Find the latest backup
         latest_backup = self._get_latest_backup()
         if not latest_backup:
+            if verbose:
+                print("No previous backup found. Creating full backup instead.")
             logger.warning("No previous backup found. Creating full backup instead.")
-            return self.create_full_backup()
-            
+            return self.create_full_backup(verbose)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_dir = self.destination_path / f"incremental_backup_{timestamp}"
         backup_dir.mkdir(exist_ok=True)
         
-        # Compare and backup only changed files
-        self._backup_changed_files(latest_backup, backup_dir)
+        start_time = time.time()
+        total_partitions = len(list(self.get_system_partitions()))
+        processed_partitions = 0
+        
+        partitions = self.get_system_partitions()
+        for partition in partitions:
+            processed_partitions += 1
+            if verbose:
+                print(f"\nBacking up partition {processed_partitions}/{total_partitions}: {partition.mountpoint}")
+            else:
+                progress = (processed_partitions / total_partitions) * 100
+                elapsed_time = time.time() - start_time
+                eta = (elapsed_time / processed_partitions) * (total_partitions - processed_partitions)
+                eta_str = f"{eta/60:.1f} minutes" if eta > 60 else f"{eta:.0f} seconds"
+                print(f"\rProgress: {progress:.1f}% | ETA: {eta_str}", end='', flush=True)
+            
+            if self.system == "Linux":
+                self._backup_linux_partition(partition, backup_dir, verbose)
+            elif self.system == "Windows":
+                self._backup_windows_partition(partition, backup_dir, verbose)
+        
         self._save_metadata(backup_dir)
+        
+        # Try remote backup if enabled
+        if self.remote_backup_enabled and self.remote_backup:
+            try:
+                if verbose:
+                    print(f"\nUploading backup to remote server...")
+                remote_path = os.path.join(REMOTE_CONFIG['server_path'], os.path.basename(str(backup_dir)))
+                self.remote_backup.ensure_remote_directory(REMOTE_CONFIG['server_path'])
+                self.remote_backup.upload_directory(str(backup_dir), remote_path)
+                if verbose:
+                    print(f"✓ Backup successfully uploaded to remote server")
+                self.remote_backup_successful = True
+            except Exception as e:
+                if verbose:
+                    print(f"× Failed to upload backup to remote server: {str(e)}")
+                self.remote_backup_successful = False
+            finally:
+                self.remote_backup.disconnect()
+        
+        if verbose:
+            print(f"\nIncremental backup completed successfully")
+        else:
+            print(f"\nBackup completed successfully")
+        
         logger.info("Incremental backup completed successfully")
+        return str(backup_dir)
 
     def create_bootable_iso(self, backup_path, output_path):
         """Create a bootable ISO from backup"""
@@ -296,28 +337,28 @@ class BackupManager:
 
 def parse_arguments():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='Lin-Win-Backup: Cross-platform backup solution')
-    parser.add_argument('--type', choices=['full', 'incremental', 'restore', 'iso', 'directory'], required=True,
-                        help='Type of backup to perform')
-    parser.add_argument('--destination', help='Backup destination directory (defaults to BACKUP_DIR from .env)')
-    parser.add_argument('--backup', help='Backup to restore from (for restore type)')
-    parser.add_argument('--create-iso', action='store_true', help='Create bootable ISO from backup')
-    parser.add_argument('--output-iso', help='Output ISO file path')
-    parser.add_argument('--source-dir', help='Source directory to backup (for directory type)')
-    parser.add_argument('--skip-remote', action='store_true', help='Skip remote backup even if configured')
+    parser = argparse.ArgumentParser(description='Lin-Win-Backup Tool')
+    parser.add_argument('--type', choices=['full', 'incremental', 'directory', 'restore', 'iso'],
+                      help='Type of backup to perform')
+    parser.add_argument('--destination', help='Destination directory for backup',
+                      default=DEFAULT_PATHS['backup_dir'])
+    parser.add_argument('--source-dir', help='Source directory for directory backup')
+    parser.add_argument('--backup', help='Backup to restore from')
+    parser.add_argument('--output-iso', help='Output path for bootable ISO')
+    parser.add_argument('--skip-remote', action='store_true',
+                      help='Skip remote backup even if configured')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                      help='Show detailed progress information')
     
-    args = parser.parse_args()
-    
-    # Set default destination from .env if not provided
-    if not args.destination and args.type != 'restore':
-        args.destination = DEFAULT_PATHS['backup_dir']
-        logger.info(f"Using default backup directory: {args.destination}")
-    
-    # Verify source-dir is provided when type is directory
-    if args.type == 'directory' and not args.source_dir:
-        parser.error("--source-dir is required when --type is directory")
-    
-    return args
+    return parser.parse_args()
+
+def format_size(size_bytes):
+    """Format size in bytes to human readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} PB"
 
 def create_backup_directory(backup_type, destination):
     """Create a backup directory with timestamp"""
@@ -506,10 +547,11 @@ def create_bootable_iso(backup_path, output_iso):
     # Implementation would go here
     return True
 
-def backup_single_directory(source_dir, destination):
+def backup_single_directory(source_dir, destination, verbose=False):
     """Backup a single directory"""
     logger.info(f"Backing up directory: {source_dir}")
-    print(f"Starting backup of directory: {source_dir}")
+    if verbose:
+        print(f"Starting backup of directory: {source_dir}")
     
     # Create backup directory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -524,6 +566,11 @@ def backup_single_directory(source_dir, destination):
     files_skipped = 0
     dirs_skipped = 0
     total_size = 0
+    start_time = time.time()
+    
+    # Get total size for progress calculation
+    total_files = sum([len(files) for _, _, files in os.walk(source_dir)])
+    processed_files = 0
     
     # Status update interval (seconds)
     status_interval = 5
@@ -540,121 +587,143 @@ def backup_single_directory(source_dir, destination):
     with tarfile.open(archive_path, 'w:gz') as tar:
         # Walk through the source directory
         for root, dirs, files in os.walk(source_dir):
-            # Show current directory being processed (periodically)
+            # Show progress
             if time.time() - last_status_time > status_interval:
-                print(f"Processing: {root} | Files: {files_processed:,} processed, {files_skipped:,} skipped | Size: {total_size / (1024*1024):.2f} MB")
-                last_status_time = time.time()
+                elapsed_time = time.time() - start_time
+                progress = (processed_files / total_files) * 100
+                if total_files > 0:
+                    eta = (elapsed_time / processed_files) * (total_files - processed_files)
+                    eta_str = f"{eta/60:.1f} minutes" if eta > 60 else f"{eta:.0f} seconds"
+                else:
+                    eta_str = "calculating..."
                 
+                if verbose:
+                    print(f"Processing: {root} | Files: {files_processed:,} processed, {files_skipped:,} skipped | Size: {format_size(total_size)}")
+                else:
+                    print(f"\rProgress: {progress:.1f}% | ETA: {eta_str}", end='', flush=True)
+                last_status_time = time.time()
+            
             # Show progress for directories with many files
-            if len(files) > 100:
+            if verbose and len(files) > 100:
                 print(f"Found {len(files):,} files in {root}")
                 file_progress = tqdm(files, desc=f"Processing {os.path.basename(root)}", leave=False)
             else:
                 file_progress = files
-                
+            
             for file in file_progress:
                 file_path = os.path.join(root, file)
                 try:
-                    # Check if we have read access
-                    if not os.access(file_path, os.R_OK):
+                    # Skip excluded files
+                    if should_exclude(Path(file_path)):
                         files_skipped += 1
                         continue
-                        
-                    # Skip files larger than 4GB for now
-                    file_size = os.path.getsize(file_path)
-                    if file_size > 4 * 1024 * 1024 * 1024:
-                        print(f"Skipping large file (>4GB): {file_path}")
-                        files_skipped += 1
-                        continue
-                        
+                    
                     # Add file to archive
-                    arcname = os.path.relpath(file_path, os.path.dirname(source_dir))
-                    tar.add(file_path, arcname=arcname)
+                    tar.add(file_path, arcname=os.path.relpath(file_path, source_dir))
+                    
+                    # Update stats
+                    files_processed += 1
+                    processed_files += 1
+                    total_size += os.path.getsize(file_path)
                     
                     # Add to metadata
-                    metadata['files'][arcname] = {
-                        'path': file_path,
-                        'size': file_size,
-                        'mtime': os.path.getmtime(file_path)
+                    metadata['files'][os.path.relpath(file_path, source_dir)] = {
+                        'size': os.path.getsize(file_path),
+                        'hash': get_file_hash(file_path)
                     }
-                    
-                    files_processed += 1
-                    total_size += file_size
-                    
                 except PermissionError:
                     files_skipped += 1
+                    processed_files += 1
                 except Exception as e:
-                    logger.error(f"Error backing up {file_path}: {e}")
+                    logger.error(f"Error processing {file_path}: {e}")
                     files_skipped += 1
+                    processed_files += 1
     
     # Save metadata
     with open(os.path.join(backup_dir, 'metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=4)
+        json.dump(metadata, f, indent=2)
     
     # Print final summary
-    print(f"\nDirectory backup completed: {source_dir}")
-    print(f"  ✓ Files processed: {files_processed:,}")
-    print(f"  ✓ Files skipped: {files_skipped:,}")
-    print(f"  ✓ Total data backed up: {total_size / (1024*1024*1024):.2f} GB\n")
+    if verbose:
+        print(f"\nBackup completed: {backup_dir}")
+        print(f"  ✓ Files processed: {files_processed:,}")
+        print(f"  ✓ Files skipped: {files_skipped:,}")
+        print(f"  ✓ Directories skipped: {dirs_skipped:,}")
+        print(f"  ✓ Total data backed up: {format_size(total_size)}")
+    else:
+        print(f"\nBackup completed: {backup_dir}")
+        print(f"Total size: {format_size(total_size)}")
     
-    logger.info(f"Directory backup completed: {source_dir}")
-    logger.info(f"Files processed: {files_processed}, skipped: {files_skipped}, total size: {total_size / (1024*1024):.2f} MB")
+    logger.info(f"Files processed: {files_processed}, skipped: {files_skipped}, total size: {format_size(total_size)}")
     
     return backup_dir
 
+def prompt_delete_local_backup(backup_path):
+    """Prompt user to delete local backup after successful remote backup"""
+    if not os.path.exists(backup_path):
+        return
+        
+    backup_size = sum(os.path.getsize(os.path.join(dirpath, filename))
+                      for dirpath, _, filenames in os.walk(backup_path)
+                      for filename in filenames)
+    backup_size_gb = backup_size / (1024 * 1024 * 1024)
+    
+    print(f"\nRemote backup completed successfully!")
+    print(f"Local backup size: {backup_size_gb:.2f} GB")
+    response = input("Would you like to delete the local backup? (y/N): ").lower()
+    
+    if response == 'y':
+        try:
+            shutil.rmtree(backup_path)
+            print(f"Local backup deleted successfully: {backup_path}")
+        except Exception as e:
+            print(f"Error deleting local backup: {e}")
+
 def main():
     """Main function to handle backup operations"""
+    args = parse_arguments()
+    
+    # Configure logging
+    logger.remove()
+    logger.add(sys.stderr, level="INFO" if args.verbose else "WARNING")
+    logger.add("backup.log", rotation="1 day", retention="7 days")
+    
+    # Create backup manager
+    backup_manager = BackupManager(args.destination)
+    
     try:
-        # Parse command line arguments
-        args = parse_arguments()
-        
-        # Set up logging
-        log_dir = DEFAULT_PATHS['log_dir']
-        log_file = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-        logger.add(log_file, rotation="1 day", retention="7 days")
-        
-        # Create backup manager
-        backup_manager = BackupManager(args.destination)
-        
-        # Check if remote backup is enabled and not explicitly skipped
-        remote_enabled = bool(REMOTE_CONFIG.get('server_ip')) and not args.skip_remote
-        remote_backup = None
-        
-        # Only try to establish remote connection if remote is enabled
-        if remote_enabled:
-            try:
-                logger.info(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
-                print(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
-                remote_backup = RemoteBackup()
-                if not remote_backup.connect():
-                    logger.warning("Will proceed with local backup only")
-                    print("Could not connect to remote server - will create local backup only")
-                    remote_backup = None
-                else:
-                    print("Successfully connected to remote backup server")
-            except Exception as e:
-                logger.warning(f"Remote backup initialization failed: {e}")
-                print("Remote backup initialization failed - will create local backup only")
-                remote_backup = None
-        elif args.skip_remote:
-            logger.info("Remote backup explicitly skipped with --skip-remote flag")
-            print("Remote backup explicitly skipped with --skip-remote flag")
-        
-        backup_path = None
         # Handle different backup types
         if args.type == 'full':
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = str(backup_manager.destination_path / f"full_backup_{timestamp}")
-            backup_manager.create_full_backup()
+            backup_manager.create_full_backup(args.verbose)
+            
+            # If remote backup is enabled and successful, prompt to delete local backup
+            if not args.skip_remote and backup_manager.remote_backup_enabled:
+                if backup_manager.remote_backup_successful:
+                    prompt_delete_local_backup(backup_path)
+                    
         elif args.type == 'incremental':
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = str(backup_manager.destination_path / f"incremental_backup_{timestamp}")
-            backup_manager.create_incremental_backup()
+            backup_manager.create_incremental_backup(args.verbose)
+            
+            # If remote backup is enabled and successful, prompt to delete local backup
+            if not args.skip_remote and backup_manager.remote_backup_enabled:
+                if backup_manager.remote_backup_successful:
+                    prompt_delete_local_backup(backup_path)
+                    
         elif args.type == 'directory':
             # Create a directory backup
             source_dir = os.path.abspath(args.source_dir)
-            backup_dir = backup_single_directory(source_dir, args.destination)
+            backup_dir = backup_single_directory(source_dir, args.destination, args.verbose)
             backup_path = backup_dir
+            
+            # If remote backup is enabled and successful, prompt to delete local backup
+            if not args.skip_remote and backup_manager.remote_backup_enabled:
+                if backup_manager.remote_backup_successful:
+                    prompt_delete_local_backup(backup_path)
+                    
         elif args.type == 'restore':
             backup_manager.restore_from_backup(args.backup)
         elif args.type == 'iso':
@@ -662,39 +731,12 @@ def main():
         else:
             logger.error(f"Unknown backup type: {args.type}")
             return 1
-        
-        # Transfer backup to remote server if connected
-        if remote_backup and backup_path:
-            try:
-                print(f"\nUploading backup to remote server at {REMOTE_CONFIG['server_ip']}...")
-                logger.info(f"Starting upload of {backup_path} to remote server")
-                
-                remote_path = os.path.join(REMOTE_CONFIG['server_path'], os.path.basename(backup_path))
-                
-                # Ensure remote directory exists
-                remote_backup.ensure_remote_directory(REMOTE_CONFIG['server_path'])
-                
-                # Upload the entire backup directory
-                remote_backup.upload_directory(backup_path, remote_path)
-                
-                print(f"✓ Backup successfully uploaded to remote server")
-                logger.info(f"Backup successfully uploaded to remote server at {remote_path}")
-            except Exception as e:
-                print(f"× Failed to upload backup to remote server: {str(e)}")
-                logger.error(f"Failed to upload backup to remote server: {str(e)}")
-                print("Local backup was successful and is available at: " + backup_path)
-            finally:
-                remote_backup.disconnect()
-        elif remote_enabled and backup_path:
-            print("\nRemote backup was not uploaded due to connection issues.")
-            print("Local backup was successful and is available at: " + backup_path)
-            logger.warning("Remote backup was not uploaded due to connection issues")
-                
-        return 0
-        
+            
     except Exception as e:
-        logger.error(f"Backup failed: {str(e)}")
+        logger.error(f"Backup failed: {e}")
         return 1
+        
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main()) 
