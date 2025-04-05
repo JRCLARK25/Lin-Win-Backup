@@ -304,6 +304,7 @@ def parse_arguments():
     parser.add_argument('--create-iso', action='store_true', help='Create bootable ISO from backup')
     parser.add_argument('--output-iso', help='Output ISO file path')
     parser.add_argument('--source-dir', help='Source directory to backup (for directory type)')
+    parser.add_argument('--skip-remote', action='store_true', help='Skip remote backup even if configured')
     
     args = parser.parse_args()
     
@@ -615,16 +616,29 @@ def main():
         # Create backup manager
         backup_manager = BackupManager(args.destination)
         
-        # Initialize remote backup connection if configured
+        # Check if remote backup is enabled and not explicitly skipped
+        remote_enabled = bool(REMOTE_CONFIG.get('server_ip')) and not args.skip_remote
         remote_backup = None
-        if 'server_ip' in REMOTE_CONFIG and REMOTE_CONFIG['server_ip']:
-            logger.info(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
-            print(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
-            remote_backup = RemoteBackup()
-            if not remote_backup.connect():
-                logger.error("Failed to connect to remote backup server")
-                print("Failed to connect to remote backup server")
+        
+        # Only try to establish remote connection if remote is enabled
+        if remote_enabled:
+            try:
+                logger.info(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
+                print(f"Remote backup configured to {REMOTE_CONFIG['server_ip']}")
+                remote_backup = RemoteBackup()
+                if not remote_backup.connect():
+                    logger.warning("Will proceed with local backup only")
+                    print("Could not connect to remote server - will create local backup only")
+                    remote_backup = None
+                else:
+                    print("Successfully connected to remote backup server")
+            except Exception as e:
+                logger.warning(f"Remote backup initialization failed: {e}")
+                print("Remote backup initialization failed - will create local backup only")
                 remote_backup = None
+        elif args.skip_remote:
+            logger.info("Remote backup explicitly skipped with --skip-remote flag")
+            print("Remote backup explicitly skipped with --skip-remote flag")
         
         backup_path = None
         # Handle different backup types
@@ -649,7 +663,7 @@ def main():
             logger.error(f"Unknown backup type: {args.type}")
             return 1
         
-        # Transfer backup to remote server if configured
+        # Transfer backup to remote server if connected
         if remote_backup and backup_path:
             try:
                 print(f"\nUploading backup to remote server at {REMOTE_CONFIG['server_ip']}...")
@@ -668,8 +682,13 @@ def main():
             except Exception as e:
                 print(f"× Failed to upload backup to remote server: {str(e)}")
                 logger.error(f"Failed to upload backup to remote server: {str(e)}")
+                print("Local backup was successful and is available at: " + backup_path)
             finally:
                 remote_backup.disconnect()
+        elif remote_enabled and backup_path:
+            print("\nRemote backup was not uploaded due to connection issues.")
+            print("Local backup was successful and is available at: " + backup_path)
+            logger.warning("Remote backup was not uploaded due to connection issues")
                 
         return 0
         

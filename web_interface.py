@@ -371,40 +371,64 @@ class StatusHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-def run_web_interface(backup_dir=None, port=8080, open_browser=True):
-    """Run the web interface for monitoring backup status"""
+def run_web_interface(backup_dir=None, port=3000, open_browser=True):
+    """Run the web interface server"""
+    global backup_directory
+    backup_directory = backup_dir or os.path.expanduser("~/Lin-Win-Backup/backups")
+    
+    # Ensure backup directory exists
+    if not os.path.exists(backup_directory):
+        os.makedirs(backup_directory, exist_ok=True)
+    
+    # Set up status handler
+    handler = StatusHandler
+    
     try:
-        # Get the backup directory
-        backup_dir = Path(backup_dir) if backup_dir else Path.home() / 'Lin-Win-Backup'
-        status_file = backup_dir / 'agent_status.json'
+        # Create the server
+        server = socketserver.TCPServer(("", port), handler)
         
-        # Create a custom handler with the status file path
-        handler = lambda *args, **kwargs: StatusHandler(*args, status_file=status_file, **kwargs)
+        logger.info(f"Starting web interface on port {port}")
+        print(f"Starting web interface on port {port}")
+        
+        # Display the URL with clickable link
+        url = f"http://localhost:{port}"
+        print(f"\nWeb interface is now running at: {url}")
+        print(f"You can access it by clicking this link or copying it to your browser.")
+        print(f"Press Ctrl+C to stop the server.\n")
+        
+        # Open browser if requested
+        if open_browser:
+            threading.Thread(target=lambda: webbrowser.open(url)).start()
         
         # Start the server
-        with socketserver.TCPServer(("", port), handler) as httpd:
-            logger.info(f"Web interface running on http://localhost:{port}")
-            
-            if open_browser:
-                webbrowser.open(f'http://localhost:{port}')
-                
-            httpd.serve_forever()
-            
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Web interface stopped by user")
+        print("\nWeb interface stopped by user")
     except Exception as e:
         logger.error(f"Failed to start web interface: {e}")
-        return False
-        
-    return True
+        print(f"Failed to start web interface: {e}")
 
 def main():
+    """Parse arguments and start web interface"""
     parser = argparse.ArgumentParser(description='Lin-Win-Backup Web Interface')
-    parser.add_argument('--backup-dir', help='Backup directory path')
-    parser.add_argument('--port', type=int, default=8080, help='Web server port')
+    parser.add_argument('--backup-dir', help='Backup directory to monitor')
+    parser.add_argument('--port', type=int, default=3000, help='Port to run the web interface on (default: 3000)')
     parser.add_argument('--no-browser', action='store_true', help='Do not open browser automatically')
     
     args = parser.parse_args()
     
-    run_web_interface(args.backup_dir, args.port, not args.no_browser)
+    # Configure logging
+    log_dir = os.path.expanduser("~/Lin-Win-Backup/logs")
+    os.makedirs(log_dir, exist_ok=True)
+    logger.add(os.path.join(log_dir, "web_interface.log"), rotation="1 day", retention="7 days")
+    
+    # Start web interface
+    run_web_interface(
+        backup_dir=args.backup_dir,
+        port=args.port,
+        open_browser=not args.no_browser
+    )
 
 if __name__ == "__main__":
     main() 
