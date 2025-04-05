@@ -10,6 +10,7 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime
 from loguru import logger
+import socket
 
 # HTML template for the status page
 HTML_TEMPLATE = """
@@ -356,17 +357,38 @@ class StatusHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/status':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')  # Allow cross-origin requests
             self.end_headers()
             
-            if self.status_file and self.status_file.exists():
-                try:
-                    with open(self.status_file, 'r') as f:
-                        status_data = json.load(f)
-                    self.wfile.write(json.dumps(status_data).encode())
-                except Exception as e:
-                    self.wfile.write(json.dumps({'error': str(e)}).encode())
-            else:
-                self.wfile.write(json.dumps({'error': 'Status file not found'}).encode())
+            print(f"\nDebug: Handling /status request")
+            print(f"Debug: Status file path: {self.status_file}")
+            
+            if not self.status_file:
+                error_msg = {'error': 'Status file path not configured'}
+                print(f"Debug: {error_msg}")
+                self.wfile.write(json.dumps(error_msg).encode())
+                return
+                
+            if not self.status_file.exists():
+                error_msg = {'error': f'Status file not found at {self.status_file}'}
+                print(f"Debug: {error_msg}")
+                self.wfile.write(json.dumps(error_msg).encode())
+                return
+                
+            try:
+                print(f"Debug: Reading status file")
+                with open(self.status_file, 'r') as f:
+                    status_data = json.load(f)
+                print(f"Debug: Successfully read status data: {json.dumps(status_data, indent=2)}")
+                self.wfile.write(json.dumps(status_data).encode())
+            except json.JSONDecodeError as e:
+                error_msg = {'error': f'Invalid JSON in status file: {str(e)}'}
+                print(f"Debug: {error_msg}")
+                self.wfile.write(json.dumps(error_msg).encode())
+            except Exception as e:
+                error_msg = {'error': f'Error reading status file: {str(e)}'}
+                print(f"Debug: {error_msg}")
+                self.wfile.write(json.dumps(error_msg).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -376,29 +398,91 @@ def run_web_interface(backup_dir=None, port=3000, open_browser=True):
     global backup_directory
     backup_directory = backup_dir or os.path.expanduser("~/Lin-Win-Backup/backups")
     
+    print(f"\nDebug: Using backup directory: {backup_directory}")
+    
     # Ensure backup directory exists
     if not os.path.exists(backup_directory):
-        os.makedirs(backup_directory, exist_ok=True)
+        try:
+            os.makedirs(backup_directory, exist_ok=True)
+            print(f"Debug: Created backup directory: {backup_directory}")
+        except Exception as e:
+            print(f"Error: Failed to create backup directory: {e}")
+            return
     
     # Set up status handler
-    handler = StatusHandler
+    class CustomStatusHandler(StatusHandler):
+        def __init__(self, *args, **kwargs):
+            self.status_file = Path(backup_directory) / 'agent_status.json'
+            print(f"\nDebug: Initializing CustomStatusHandler")
+            print(f"Debug: Status file path: {self.status_file}")
+            
+            if not self.status_file.exists():
+                print(f"Debug: Status file does not exist, creating sample file")
+                # Create a sample status file if it doesn't exist
+                sample_status = {
+                    "hostname": socket.gethostname(),
+                    "system": "Linux",
+                    "status": "idle",
+                    "current_backup": None,
+                    "next_scheduled": None,
+                    "disk_usage": {
+                        "/": {"total": 100000000000, "used": 50000000000, "free": 50000000000, "percent": 50},
+                        "/home": {"total": 500000000000, "used": 200000000000, "free": 300000000000, "percent": 40}
+                    },
+                    "backup_history": []
+                }
+                try:
+                    with open(self.status_file, 'w') as f:
+                        json.dump(sample_status, f, indent=2)
+                    print(f"Debug: Created sample status file at {self.status_file}")
+                    # Verify the file was created and is readable
+                    with open(self.status_file, 'r') as f:
+                        json.load(f)
+                    print(f"Debug: Verified status file is readable and contains valid JSON")
+                except Exception as e:
+                    print(f"Error: Failed to create/verify sample status file: {e}")
+            else:
+                print(f"Debug: Status file exists at {self.status_file}")
+                try:
+                    with open(self.status_file, 'r') as f:
+                        json.load(f)
+                    print(f"Debug: Verified existing status file is readable and contains valid JSON")
+                except Exception as e:
+                    print(f"Error: Existing status file is invalid: {e}")
+            
+            super().__init__(*args, status_file=self.status_file)
     
     try:
-        # Create the server
-        server = socketserver.TCPServer(("", port), handler)
+        # Allow connections from any IP address by binding to 0.0.0.0
+        server = socketserver.TCPServer(("0.0.0.0", port), CustomStatusHandler)
+        server.allow_reuse_address = True  # Add this line to allow port reuse
         
         logger.info(f"Starting web interface on port {port}")
-        print(f"Starting web interface on port {port}")
+        print(f"\nDebug: Starting web interface on port {port}")
         
-        # Display the URL with clickable link
-        url = f"http://localhost:{port}"
-        print(f"\nWeb interface is now running at: {url}")
-        print(f"You can access it by clicking this link or copying it to your browser.")
-        print(f"Press Ctrl+C to stop the server.\n")
+        # Get the machine's IP addresses
+        try:
+            ip_addresses = []
+            # Get all IP addresses for the machine
+            for info in socket.getaddrinfo(socket.gethostname(), None):
+                ip = info[4][0]
+                if not ip.startswith('127.') and ':' not in ip:  # Skip localhost and IPv6
+                    ip_addresses.append(ip)
+            print(f"Debug: Found IP addresses: {ip_addresses}")
+        except Exception as e:
+            ip_addresses = ["Unable to determine IP addresses"]
+            print(f"Error: Could not determine IP addresses: {e}")
         
-        # Open browser if requested
+        # Display URLs for all available interfaces
+        print("\nWeb interface is now running at:")
+        print(f"Local access:     http://localhost:{port}")
+        for ip in ip_addresses:
+            print(f"Network access:   http://{ip}:{port}")
+        print("\nPress Ctrl+C to stop the server.\n")
+        
+        # Open browser if requested and running locally
         if open_browser:
-            threading.Thread(target=lambda: webbrowser.open(url)).start()
+            threading.Thread(target=lambda: webbrowser.open(f"http://localhost:{port}")).start()
         
         # Start the server
         server.serve_forever()
@@ -407,7 +491,12 @@ def run_web_interface(backup_dir=None, port=3000, open_browser=True):
         print("\nWeb interface stopped by user")
     except Exception as e:
         logger.error(f"Failed to start web interface: {e}")
-        print(f"Failed to start web interface: {e}")
+        print(f"Error: Failed to start web interface: {e}")
+        # Try to clean up
+        try:
+            server.server_close()
+        except:
+            pass
 
 def main():
     """Parse arguments and start web interface"""
