@@ -609,8 +609,13 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         parsed_path = urlparse(self.path)
         path = parsed_path.path
         
+        # Serve web interface pages
+        if path == '/':
+            self._serve_login_page()
+        elif path == '/dashboard':
+            self._serve_dashboard_page()
         # API endpoints
-        if path == '/api/public_key':
+        elif path == '/api/public_key':
             self._handle_public_key()
         elif path.startswith('/api/client/'):
             client_id = path.split('/')[3]
@@ -623,6 +628,20 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         else:
             # Serve static files
             super().do_GET()
+    
+    def _serve_login_page(self):
+        """Serve the login page"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(LOGIN_TEMPLATE.encode())
+    
+    def _serve_dashboard_page(self):
+        """Serve the dashboard page"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(DASHBOARD_TEMPLATE.encode())
     
     def do_POST(self):
         """Handle POST requests"""
