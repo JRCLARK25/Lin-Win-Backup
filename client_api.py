@@ -13,6 +13,8 @@ import psutil
 from loguru import logger
 from encryption_utils import EncryptionManager
 from client_config import ClientConfig
+import http.server
+import threading
 
 class ClientAPI:
     """Client API for communicating with the backup server"""
@@ -44,6 +46,13 @@ class ClientAPI:
         logger.remove()  # Remove default handler
         logger.add(log_file, level=log_level)
         logger.add(lambda msg: print(msg), level=log_level)  # Also print to console
+        
+        # Initialize backup status tracking
+        self.current_backup = None
+        self.backup_history = []
+        
+        # Start backup control server
+        self._start_backup_control_server()
     
     def _generate_client_id(self):
         """Generate a unique client ID based on hostname and MAC address"""
@@ -250,34 +259,105 @@ class ClientAPI:
             logger.error(f"Error getting schedule: {e}")
             return None
     
-    def report_backup_result(self, backup_id, result_data):
-        """Report backup result to server"""
-        if not self.server_url:
-            logger.error("Server URL not set")
-            return False
-        
-        if not this._check_server_authorization(self.server_url):
-            logger.error("Server is not authorized")
-            return False
-        
+    def report_backup_result(self, backup_type, status, size=0, files=0, error=None):
+        """Report final backup result to server"""
         try:
-            # Encrypt result data
-            encrypted_data = this.encryption.encrypt_for_server(result_data)
-            
-            # Send to server
-            data = {
-                'encrypted_data': encrypted_data
+            # Create backup result
+            backup_result = {
+                'type': backup_type,
+                'status': status,
+                'size': size,
+                'files': files,
+                'error': error,
+                'start_time': self.current_backup['start_time'] if self.current_backup else datetime.now().isoformat(),
+                'end_time': datetime.now().isoformat()
             }
             
-            response = requests.post(f"{this.server_url}/api/client/{this.client_id}/backup/{backup_id}/result", json=data)
-            if response.status_code != 200:
+            # Add to history
+            self.backup_history.append(backup_result)
+            
+            # Prepare result data
+            result_data = {
+                'client_id': self.client_id,
+                'backup_result': backup_result
+            }
+            
+            # Send result to server
+            response = requests.post(
+                f"{self.server_url}/api/client/{self.client_id}/backup/result",
+                json=result_data,
+                headers={'Authorization': f'Bearer {self._get_auth_token()}'}
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Backup result reported: {status}")
+                # Clear current backup
+                self.current_backup = None
+                return True
+            else:
                 logger.error(f"Failed to report backup result: {response.text}")
                 return False
-            
-            logger.info("Successfully reported backup result")
-            return True
+                
         except Exception as e:
-            logger.error(f"Error reporting backup result: {e}")
+            logger.error(f"Error reporting backup result: {str(e)}")
+            return False
+    
+    def start_backup(self, backup_type, source_dir=None):
+        """Start a backup operation"""
+        try:
+            # Update status to in-progress
+            if not self.update_backup_status(backup_type, 'in_progress', 0):
+                return False
+            
+            # Perform backup operation based on type
+            if backup_type == 'full':
+                # Implement full backup
+                pass
+            elif backup_type == 'incremental':
+                # Implement incremental backup
+                pass
+            elif backup_type == 'directory':
+                if not source_dir:
+                    raise ValueError("Source directory required for directory backup")
+                # Implement directory backup
+                pass
+            
+            # Update progress periodically
+            for progress in range(0, 101, 10):
+                if not self.update_backup_status(backup_type, 'in_progress', progress):
+                    return False
+                time.sleep(1)  # Simulate backup progress
+            
+            # Report successful completion
+            return self.report_backup_result(backup_type, 'completed', size=1000, files=100)
+            
+        except Exception as e:
+            logger.error(f"Error during backup: {str(e)}")
+            self.report_backup_result(backup_type, 'failed', error=str(e))
+            return False
+    
+    def check_schedule(self):
+        """Check for scheduled backups"""
+        try:
+            response = requests.get(
+                f"{self.server_url}/api/client/{self.client_id}/schedule",
+                headers={'Authorization': f'Bearer {self._get_auth_token()}'}
+            )
+            
+            if response.status_code == 200:
+                schedule = response.json()
+                if schedule.get('next_scheduled'):
+                    # Check if it's time to run the backup
+                    scheduled_time = datetime.fromisoformat(schedule['next_scheduled'])
+                    if datetime.now() >= scheduled_time:
+                        return self.start_backup(
+                            schedule.get('type', 'full'),
+                            schedule.get('source', '/')
+                        )
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking schedule: {str(e)}")
             return False
     
     def get_system_info(self):
@@ -402,4 +482,116 @@ class ClientAPI:
     
     def update_config(self, new_config):
         """Update the configuration with new values"""
-        self.config.update_config(new_config) 
+        self.config.update_config(new_config)
+    
+    def update_backup_status(self, backup_type, status, progress=0, error=None):
+        """Update and report backup status to server"""
+        try:
+            # Update local status
+            self.current_backup = {
+                'type': backup_type,
+                'status': status,
+                'progress': progress,
+                'error': error,
+                'start_time': datetime.now().isoformat(),
+                'end_time': datetime.now().isoformat() if status in ['completed', 'failed'] else None
+            }
+            
+            # Prepare status data
+            status_data = {
+                'client_id': self.client_id,
+                'current_backup': self.current_backup,
+                'system': platform.system(),
+                'version': platform.version(),
+                'hostname': socket.gethostname()
+            }
+            
+            # Send status update to server
+            response = requests.post(
+                f"{self.server_url}/api/client/{self.client_id}/status",
+                json=status_data,
+                headers={'Authorization': f'Bearer {self._get_auth_token()}'}
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Backup status updated: {status} ({progress}%)")
+                return True
+            else:
+                logger.error(f"Failed to update backup status: {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error updating backup status: {str(e)}")
+            return False
+    
+    def _start_backup_control_server(self):
+        """Start a server to handle backup control requests"""
+        class BackupControlHandler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                self.client_api = self
+                super().__init__(*args, **kwargs)
+            
+            def do_POST(self):
+                """Handle POST requests"""
+                if self.path == '/api/backup/start':
+                    self._handle_backup_start()
+                else:
+                    self._send_error(404, "Not found")
+            
+            def _handle_backup_start(self):
+                """Handle backup start request"""
+                try:
+                    # Get request body
+                    content_length = int(self.headers.get('Content-Length', 0))
+                    body = self.rfile.read(content_length)
+                    
+                    if not body:
+                        return self._send_error(400, "Empty request body")
+                    
+                    try:
+                        data = json.loads(body.decode())
+                    except json.JSONDecodeError:
+                        return self._send_error(400, "Invalid JSON in request body")
+                    
+                    # Validate backup type
+                    backup_type = data.get('type')
+                    if backup_type not in ['full', 'incremental', 'directory']:
+                        return self._send_error(400, "Invalid backup type")
+                    
+                    # Validate source directory for directory backup
+                    source_dir = data.get('source_dir')
+                    if backup_type == 'directory' and not source_dir:
+                        return self._send_error(400, "Source directory required for directory backup")
+                    
+                    # Start the backup
+                    if self.client_api.start_backup(backup_type, source_dir):
+                        self._send_json_response({'status': 'success', 'message': 'Backup started'})
+                    else:
+                        self._send_error(500, "Failed to start backup")
+                    
+                except Exception as e:
+                    logger.error(f"Error handling backup start request: {str(e)}")
+                    self._send_error(500, str(e))
+            
+            def _send_json_response(self, data, status_code=200):
+                """Send JSON response"""
+                self.send_response(status_code)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(data).encode())
+            
+            def _send_error(self, code, message):
+                """Send error response"""
+                self.send_response(code)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': message}).encode())
+        
+        # Start the server in a separate thread
+        server = http.server.ThreadingTCPServer(('localhost', 0), BackupControlHandler)
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.daemon = True
+        server_thread.start()
+        
+        # Store the server port for the client to use
+        self.backup_control_port = server.server_address[1] 

@@ -16,6 +16,7 @@ import socket
 import platform
 from urllib.parse import parse_qs, urlparse
 from encryption_utils import EncryptionManager
+import requests
 
 # HTML template for the login page
 LOGIN_TEMPLATE = """
@@ -309,6 +310,79 @@ DASHBOARD_TEMPLATE = """
         .form-group {
             flex: 1;
         }
+        .backup-control {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        
+        .backup-control h3 {
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+        
+        .backup-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .backup-button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        
+        .backup-button.full {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        .backup-button.incremental {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        .backup-button.directory {
+            background-color: #17a2b8;
+            color: white;
+        }
+        
+        .backup-button:hover {
+            opacity: 0.9;
+        }
+        
+        .directory-input {
+            display: none;
+            margin-top: 10px;
+        }
+        
+        .directory-input input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        
+        .directory-input button {
+            padding: 8px 15px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .error-message {
+            color: #dc3545;
+            margin-top: 10px;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -345,13 +419,29 @@ DASHBOARD_TEMPLATE = """
             </select>
         </div>
         
-        <div id="client-data">
+        <div id="client-data" style="display: none;">
             <div class="status-card">
                 <h2>Client Status</h2>
                 <p><strong>Hostname:</strong> <span id="hostname">-</span></p>
                 <p><strong>System:</strong> <span id="system">-</span></p>
-                <p><strong>Status:</strong> <span id="client-status" class="status-badge">-</span></p>
-                <p><strong>Last Updated:</strong> <span id="last-updated">-</span></p>
+                <p><strong>Status:</strong> <span id="status">-</span></p>
+                <p><strong>Last Seen:</strong> <span id="last-seen">-</span></p>
+            </div>
+            
+            <div class="backup-control">
+                <h3>Backup Control</h3>
+                <div class="backup-buttons">
+                    <button class="backup-button full" onclick="startBackup('full')">Start Full Backup</button>
+                    <button class="backup-button incremental" onclick="startBackup('incremental')">Start Incremental Backup</button>
+                    <button class="backup-button directory" onclick="showDirectoryInput()">Start Directory Backup</button>
+                </div>
+                
+                <div id="directory-input" class="directory-input">
+                    <input type="text" id="source-dir" placeholder="Enter directory path">
+                    <button onclick="startDirectoryBackup()">Start Backup</button>
+                </div>
+                
+                <div id="error-message" class="error-message"></div>
             </div>
             
             <div class="status-card">
@@ -475,8 +565,8 @@ DASHBOARD_TEMPLATE = """
                 
                 document.getElementById('hostname').textContent = data.hostname;
                 document.getElementById('system').textContent = data.system;
-                updateStatusBadge(document.getElementById('client-status'), data.status || 'Unknown');
-                document.getElementById('last-updated').textContent = formatDate(data.last_seen);
+                updateStatusBadge(document.getElementById('status'), data.status || 'Unknown');
+                document.getElementById('last-seen').textContent = formatDate(data.last_seen);
                 
                 updateCurrentBackup(data.current_backup);
                 updateScheduleInfo(data.next_scheduled);
@@ -647,6 +737,88 @@ DASHBOARD_TEMPLATE = """
             return false;
         }
         
+        function showDirectoryInput() {
+            document.getElementById('directory-input').style.display = 'block';
+        }
+        
+        function startBackup(type) {
+            const clientId = document.getElementById('client-select').value;
+            if (!clientId) {
+                showError('Please select a client first');
+                return;
+            }
+            
+            fetch(`/api/client/${clientId}/backup/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ type: type })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                } else {
+                    hideError();
+                    loadClientData();
+                }
+            })
+            .catch(error => {
+                showError('Failed to start backup: ' + error);
+            });
+        }
+        
+        function startDirectoryBackup() {
+            const clientId = document.getElementById('client-select').value;
+            const sourceDir = document.getElementById('source-dir').value;
+            
+            if (!clientId) {
+                showError('Please select a client first');
+                return;
+            }
+            
+            if (!sourceDir) {
+                showError('Please enter a directory path');
+                return;
+            }
+            
+            fetch(`/api/client/${clientId}/backup/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    type: 'directory',
+                    source_dir: sourceDir
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                } else {
+                    hideError();
+                    document.getElementById('directory-input').style.display = 'none';
+                    document.getElementById('source-dir').value = '';
+                    loadClientData();
+                }
+            })
+            .catch(error => {
+                showError('Failed to start backup: ' + error);
+            });
+        }
+        
+        function showError(message) {
+            const errorElement = document.getElementById('error-message');
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+        }
+        
+        function hideError() {
+            document.getElementById('error-message').style.display = 'none';
+        }
+        
         // Initial load
         loadClients();
     </script>
@@ -780,9 +952,10 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             client_id = path.split('/')[3]
             if path.endswith('/status'):
                 self._handle_client_status_update(client_id, data)
-            elif '/backup/' in path and path.endswith('/result'):
-                backup_id = path.split('/')[-2]
-                self._handle_backup_result(client_id, backup_id, data)
+            elif path.endswith('/backup/result'):
+                self._handle_backup_result(client_id, data)
+            elif path.endswith('/backup/start'):
+                self._handle_start_backup(client_id, data)
             else:
                 self._send_error(404, "Not found")
         else:
@@ -928,16 +1101,6 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
     def _handle_client_status_update(self, client_id, data):
         """Handle client status update"""
         try:
-            # Decrypt the status data
-            encrypted_data = data['encrypted_data']
-            decrypted_data = self.encryption.decrypt_from_client(encrypted_data)
-            
-            if decrypted_data is None:
-                self._send_error(400, "Failed to decrypt data")
-                return
-            
-            status_data = json.loads(decrypted_data)
-            
             # Update client info
             clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
             with open(clients_file, 'r') as f:
@@ -947,25 +1110,21 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_error(404, "Client not found")
                 return
             
+            # Update client status
             clients[client_id].update({
                 'last_seen': datetime.now().isoformat(),
-                'current_backup': status_data.get('current_backup'),
-                'next_scheduled': status_data.get('next_scheduled'),
-                'disk_usage': status_data.get('disk_usage')
+                'current_backup': data.get('current_backup'),
+                'system': data.get('system'),
+                'version': data.get('version'),
+                'hostname': data.get('hostname')
             })
-            
-            # Update backup history
-            if 'backup_result' in status_data:
-                backup_result = status_data['backup_result']
-                clients[client_id]['backup_history'].append(backup_result)
-                # Keep only last 10 backups
-                clients[client_id]['backup_history'] = clients[client_id]['backup_history'][-10:]
             
             with open(clients_file, 'w') as f:
                 json.dump(clients, f, indent=2)
             
             self._send_json_response({'status': 'success'})
         except Exception as e:
+            logger.error(f"Error updating client status: {str(e)}")
             self._send_error(500, str(e))
     
     def _handle_client_schedule(self, client_id):
@@ -989,19 +1148,9 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._send_error(500, str(e))
     
-    def _handle_backup_result(self, client_id, backup_id, data):
+    def _handle_backup_result(self, client_id, data):
         """Handle backup result report"""
         try:
-            # Decrypt the result data
-            encrypted_data = data['encrypted_data']
-            decrypted_data = self.encryption.decrypt_from_client(encrypted_data)
-            
-            if decrypted_data is None:
-                self._send_error(400, "Failed to decrypt data")
-                return
-            
-            result_data = json.loads(decrypted_data)
-            
             # Update client info
             clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
             with open(clients_file, 'r') as f:
@@ -1012,14 +1161,17 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
                 return
             
             # Add to backup history
-            result_data['backup_id'] = backup_id
-            result_data['timestamp'] = datetime.now().isoformat()
-            clients[client_id]['backup_history'].append(result_data)
-            # Keep only last 10 backups
-            clients[client_id]['backup_history'] = clients[client_id]['backup_history'][-10:]
+            backup_result = data.get('backup_result')
+            if backup_result:
+                if 'backup_history' not in clients[client_id]:
+                    clients[client_id]['backup_history'] = []
+                clients[client_id]['backup_history'].append(backup_result)
+                # Keep only last 10 backups
+                clients[client_id]['backup_history'] = clients[client_id]['backup_history'][-10:]
             
             # Clear current backup if this was the one in progress
-            if (clients[client_id].get('current_backup', {}).get('id') == backup_id):
+            if (clients[client_id].get('current_backup', {}).get('start_time') == 
+                backup_result.get('start_time')):
                 clients[client_id]['current_backup'] = None
             
             with open(clients_file, 'w') as f:
@@ -1027,7 +1179,67 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             
             self._send_json_response({'status': 'success'})
         except Exception as e:
+            logger.error(f"Error handling backup result: {str(e)}")
             self._send_error(500, str(e))
+    
+    def _handle_start_backup(self, client_id, data):
+        """Handle request to start a backup on a client"""
+        try:
+            # Validate backup type
+            backup_type = data.get('type')
+            if backup_type not in ['full', 'incremental', 'directory']:
+                return self._send_json_response({'error': 'Invalid backup type'}, 400)
+            
+            # Validate source directory for directory backup
+            source_dir = data.get('source_dir')
+            if backup_type == 'directory' and not source_dir:
+                return self._send_json_response({'error': 'Source directory required for directory backup'}, 400)
+            
+            # Load client info
+            clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
+            with open(clients_file, 'r') as f:
+                clients = json.load(f)
+            
+            if client_id not in clients:
+                return self._send_json_response({'error': 'Client not found'}, 404)
+            
+            # Check if client is already running a backup
+            if clients[client_id].get('current_backup'):
+                return self._send_json_response({'error': 'Client is already running a backup'}, 400)
+            
+            # Prepare backup request
+            backup_request = {
+                'type': backup_type,
+                'source_dir': source_dir if backup_type == 'directory' else None,
+                'start_time': datetime.now().isoformat()
+            }
+            
+            # Update client status
+            clients[client_id]['current_backup'] = backup_request
+            
+            # Save updated client info
+            with open(clients_file, 'w') as f:
+                json.dump(clients, f, indent=2)
+            
+            # Send backup request to client
+            response = requests.post(
+                f"{clients[client_id]['server_url']}/api/backup/start",
+                json=backup_request,
+                headers={'Authorization': f'Bearer {clients[client_id]["auth_token"]}'}
+            )
+            
+            if response.status_code == 200:
+                return self._send_json_response({'status': 'success', 'message': 'Backup started'})
+            else:
+                # Revert client status if backup start failed
+                clients[client_id]['current_backup'] = None
+                with open(clients_file, 'w') as f:
+                    json.dump(clients, f, indent=2)
+                return self._send_json_response({'error': 'Failed to start backup on client'}, 500)
+            
+        except Exception as e:
+            logger.error(f"Error starting backup: {str(e)}")
+            return self._send_json_response({'error': str(e)}, 500)
     
     def _send_json_response(self, data, status_code=200):
         """Send JSON response with optional status code"""
