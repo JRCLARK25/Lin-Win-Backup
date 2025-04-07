@@ -19,6 +19,7 @@ def main():
     server_parser.add_argument('--add-authorized', help='Add authorized server IP or subnet')
     server_parser.add_argument('--remove-authorized', help='Remove authorized server IP or subnet')
     server_parser.add_argument('--list-authorized', action='store_true', help='List authorized servers')
+    server_parser.add_argument('--temp-token', help='Temporary token for initial registration')
     
     # Client configuration
     client_parser = subparsers.add_parser('client', help='Configure client settings')
@@ -74,6 +75,13 @@ def main():
             print("  IPs:", config_data['authorized_servers']['ips'])
             print("  Subnets:", config_data['authorized_servers']['subnets'])
             print("  Hostnames:", config_data['authorized_servers']['hostnames'])
+        
+        if args.temp_token:
+            # Store temporary token
+            token_file = os.path.join(config.config_dir, 'auth.token')
+            with open(token_file, 'w') as f:
+                f.write(args.temp_token)
+            print("Temporary token stored for initial registration")
     
     elif args.command == 'client':
         if args.name:
@@ -146,8 +154,18 @@ def main():
             sys.exit(1)
         
         print("Registering with server...")
-        if api.register_with_server():
+        # Try to get temporary token if available
+        token_file = os.path.join(config.config_dir, 'auth.token')
+        temp_token = None
+        if os.path.exists(token_file):
+            with open(token_file, 'r') as f:
+                temp_token = f.read().strip()
+            # Remove token file after reading
+            os.remove(token_file)
+        
+        if api.register_with_server(temp_token):
             print("Successfully registered with server")
+            print("RSA keys have been generated and exchanged with the server")
         else:
             print("Failed to register with server")
     

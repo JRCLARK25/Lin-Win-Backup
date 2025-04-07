@@ -28,7 +28,12 @@ class ClientAPI:
         
         self.server_url = server_url
         self.client_id = client_id or self._generate_client_id()
-        self.keys_dir = keys_dir or os.path.expanduser('~/Lin-Win-Backup/keys/client')
+        self.keys_dir = keys_dir or os.path.expanduser('~/Lin-Win-Backup/keys')
+        
+        # Initialize key management
+        os.makedirs(self.keys_dir, exist_ok=True)
+        self.private_key_path = os.path.join(self.keys_dir, 'id_rsa')
+        self.public_key_path = os.path.join(self.keys_dir, 'id_rsa.pub')
         
         # Initialize encryption manager
         self.encryption = self._load_or_generate_keys()
@@ -48,21 +53,16 @@ class ClientAPI:
     
     def _load_or_generate_keys(self):
         """Load existing keys or generate new ones"""
-        os.makedirs(self.keys_dir, exist_ok=True)
-        
         encryption = EncryptionManager()
         
         # Check if keys already exist
-        private_key_path = os.path.join(self.keys_dir, 'private_key.pem')
-        public_key_path = os.path.join(self.keys_dir, 'public_key.pem')
-        
-        if os.path.exists(private_key_path) and os.path.exists(public_key_path):
+        if os.path.exists(self.private_key_path) and os.path.exists(self.public_key_path):
             # Load existing keys
-            encryption.load_keys(private_key_path, public_key_path)
+            encryption.load_keys(self.private_key_path, self.public_key_path)
         else:
             # Generate new keys
             encryption.generate_keys()
-            encryption.save_keys(private_key_path, public_key_path)
+            encryption.save_keys(self.private_key_path, self.public_key_path)
         
         return encryption
     
@@ -91,50 +91,102 @@ class ClientAPI:
             logger.error(f"Error checking server authorization: {e}")
             return False
     
-    def register_with_server(self):
-        """Register this client with the server"""
-        if not self.server_url:
-            logger.error("Server URL not set")
-            return False
-        
-        if not self._check_server_authorization(self.server_url):
-            logger.error("Server is not authorized")
-            return False
-        
+    def generate_keys(self):
+        """Generate new RSA key pair for the client"""
         try:
-            # Get server's public key
-            response = requests.get(f"{self.server_url}/api/public_key")
-            if response.status_code != 200:
-                logger.error(f"Failed to get server public key: {response.text}")
-                return False
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            from cryptography.hazmat.backends import default_backend
             
-            server_public_key = response.json()['public_key']
+            # Generate private key
+            private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+                backend=default_backend()
+            )
             
-            # Get client's public key
-            client_public_key = self.encryption.get_public_key_pem()
+            # Save private key
+            with open(self.private_key_path, 'wb') as f:
+                f.write(private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
             
-            # Get system information
-            system_info = self.get_system_info()
+            # Save public key
+            public_key = private_key.public_key()
+            with open(self.public_key_path, 'wb') as f:
+                f.write(public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                ))
             
-            # Register client
-            data = {
-                'client_id': self.client_id,
-                'public_key': client_public_key,
-                'hostname': socket.gethostname(),
-                'system': system_info['system'],
-                'version': system_info['version']
-            }
+            # Set proper permissions
+            os.chmod(self.private_key_path, 0o600)
+            os.chmod(self.public_key_path, 0o644)
             
-            response = requests.post(f"{self.server_url}/api/register_client", json=data)
-            if response.status_code != 200:
-                logger.error(f"Failed to register client: {response.text}")
-                return False
-            
-            logger.info("Successfully registered with server")
             return True
         except Exception as e:
-            logger.error(f"Error registering with server: {e}")
+            logger.error(f"Failed to generate keys: {str(e)}")
             return False
+    
+    def register_with_server(self, temp_token=None):
+        """Register client with server and exchange keys"""
+        try:
+            # Generate new keys if they don't exist
+            if not os.path.exists(self.private_key_path) or not os.path.exists(self.public_key_path):
+                if not self.generate_keys():
+                    return False
+            
+            # Read public key
+            with open(self.public_key_path, 'r') as f:
+                public_key = f.read()
+            
+            # Prepare registration data
+            data = {
+                'client_id': self.client_id,
+                'public_key': public_key,
+                'system': platform.system(),
+                'version': platform.version(),
+                'hostname': socket.gethostname()
+            }
+            
+            # Add temporary token if provided
+            if temp_token:
+                data['temp_token'] = temp_token
+            
+            # Send registration request
+            response = requests.post(
+                f"{self.server_url}/api/register_client_key",
+                json=data,
+                headers={'Authorization': f'Bearer {self._get_auth_token()}'}
+            )
+            
+            if response.status_code == 200:
+                logger.info("Successfully registered with server")
+                return True
+            else:
+                logger.error(f"Failed to register with server: {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error during registration: {str(e)}")
+            return False
+    
+    def _get_auth_token(self):
+        """Get authentication token for API requests"""
+        # First try to get token from environment
+        token = os.environ.get('BACKUP_AUTH_TOKEN')
+        if token:
+            return token
+            
+        # Then try to read from token file
+        token_file = os.path.join(self.config_dir, 'auth.token')
+        if os.path.exists(token_file):
+            with open(token_file, 'r') as f:
+                return f.read().strip()
+        
+        return None
     
     def send_status_update(self, status_data):
         """Send status update to server"""

@@ -747,6 +747,32 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_error(401, "Unauthorized")
                 return
             self._handle_add_client(data)
+        elif path == '/api/register_client_key':
+            if not self._check_auth():
+                return
+            
+            try:
+                data = json.loads(body)
+                client_id = data.get('client_id')
+                public_key = data.get('public_key')
+                
+                if not client_id or not public_key:
+                    self._send_json_response({'error': 'Missing client_id or public_key'}, 400)
+                    return
+                
+                # Store the client's public key
+                keys_dir = os.path.expanduser('~/Lin-Win-Backup/keys/clients')
+                os.makedirs(keys_dir, exist_ok=True)
+                
+                key_file = os.path.join(keys_dir, f'{client_id}.pub')
+                with open(key_file, 'w') as f:
+                    f.write(public_key)
+                
+                self._send_json_response({'status': 'success'})
+                
+            except Exception as e:
+                self._send_json_response({'error': str(e)}, 500)
+                return
         elif path.startswith('/api/client/'):
             if not self._check_auth():
                 self._send_error(401, "Unauthorized")
@@ -1070,68 +1096,74 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, str(e))
 
     def _handle_add_client(self, data):
-        """Handle adding a new client manually"""
+        """Handle adding a new client"""
         try:
             ip = data.get('ip')
-            friendly_name = data.get('friendly_name', '')
+            friendly_name = data.get('friendly_name')
             
             if not ip:
-                self._send_error(400, "IP address is required")
-                return
+                return self._send_json_response({'error': 'IP address is required'}, 400)
             
-            # Validate IP address format
+            # Validate IP address
             try:
                 socket.inet_aton(ip)
             except socket.error:
-                self._send_error(400, "Invalid IP address format")
-                return
+                return self._send_json_response({'error': 'Invalid IP address'}, 400)
             
-            # Try to get hostname from IP
+            # Try to resolve hostname
             try:
                 hostname = socket.gethostbyaddr(ip)[0]
-            except (socket.herror, socket.gaierror):
+            except socket.herror:
                 hostname = ip
             
-            # Generate a client ID
-            client_id = f"client_{hashlib.md5(f"{ip}_{hostname}".encode()).hexdigest()[:8]}"
+            # Generate a unique client ID
+            client_id = hashlib.sha256(f"{ip}{hostname}".encode()).hexdigest()[:12]
             
             # Load existing clients
             clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
-            clients = {}
+            os.makedirs(os.path.dirname(clients_file), exist_ok=True)
+            
             if os.path.exists(clients_file):
                 with open(clients_file, 'r') as f:
                     clients = json.load(f)
+            else:
+                clients = {}
             
             # Check if client already exists
             if client_id in clients:
-                self._send_error(400, "Client already exists")
-                return
+                return self._send_json_response({'error': 'Client already exists'}, 400)
             
             # Add new client
             clients[client_id] = {
+                'ip': ip,
                 'hostname': hostname,
                 'friendly_name': friendly_name,
-                'ip': ip,
-                'system': 'Unknown',  # Will be updated when client connects
-                'version': 'Unknown',  # Will be updated when client connects
-                'last_seen': datetime.now().isoformat(),
+                'status': 'Unknown',
+                'system': 'Unknown',
+                'version': 'Unknown',
+                'last_seen': None,
                 'current_backup': None,
-                'next_scheduled': None,
-                'backup_history': []
+                'schedules': []
             }
             
             # Save updated clients
             with open(clients_file, 'w') as f:
                 json.dump(clients, f, indent=2)
             
-            self._send_json_response({
+            # Generate a temporary token for initial key exchange
+            temp_token = secrets.token_urlsafe(32)
+            temp_token_file = os.path.join(os.path.dirname(clients_file), f'{client_id}.token')
+            with open(temp_token_file, 'w') as f:
+                f.write(temp_token)
+            
+            return self._send_json_response({
                 'status': 'success',
                 'client_id': client_id,
-                'message': 'Client added successfully'
+                'temp_token': temp_token
             })
             
         except Exception as e:
-            self._send_error(500, str(e))
+            return self._send_json_response({'error': str(e)}, 500)
 
 def run_server(port=3000):
     """Run the server"""
