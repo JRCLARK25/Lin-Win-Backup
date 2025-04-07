@@ -383,6 +383,87 @@ DASHBOARD_TEMPLATE = """
             margin-top: 10px;
             display: none;
         }
+        
+        .backup-info {
+            margin-top: 20px;
+        }
+        
+        .backup-info h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .backup-info p {
+            margin: 5px 0;
+            color: #666;
+        }
+        
+        .backup-info .status {
+            font-weight: bold;
+        }
+        
+        .backup-info .status.in-progress {
+            color: #007bff;
+        }
+        
+        .backup-info .status.completed {
+            color: #28a745;
+        }
+        
+        .backup-info .status.failed {
+            color: #dc3545;
+        }
+        
+        .backup-history {
+            margin-top: 20px;
+        }
+        
+        .backup-history table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        
+        .backup-history th, .backup-history td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .backup-history th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        
+        .backup-history tr:hover {
+            background-color: #f5f5f5;
+        }
+        
+        .backup-schedule {
+            margin-top: 20px;
+        }
+        
+        .backup-schedule .schedule-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        
+        .backup-schedule .schedule-item h4 {
+            margin: 0 0 5px 0;
+            color: #333;
+        }
+        
+        .backup-schedule .schedule-item p {
+            margin: 5px 0;
+            color: #666;
+        }
+        
+        .no-data {
+            color: #999;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -446,64 +527,22 @@ DASHBOARD_TEMPLATE = """
             
             <div class="status-card">
                 <h2>Current Backup</h2>
-                <div id="current-backup">
-                    <p>No backup in progress</p>
+                <div id="current-backup" class="backup-info">
+                    <p class="no-data">No backup in progress</p>
                 </div>
             </div>
             
             <div class="status-card">
                 <h2>Backup Schedule</h2>
-                <div id="schedule-info">
-                    <p>No scheduled backups</p>
-                </div>
-                <div class="action-buttons">
-                    <button class="btn btn-primary" onclick="showScheduleForm()">Add Schedule</button>
-                </div>
-                <div id="schedule-form" class="schedule-form" style="display: none;">
-                    <h3>Add Backup Schedule</h3>
-                    <form onsubmit="return handleScheduleSubmit(event)">
-                        <div class="form-group">
-                            <label for="schedule-type">Backup Type:</label>
-                            <select id="schedule-type" required>
-                                <option value="full">Full Backup</option>
-                                <option value="incremental">Incremental Backup</option>
-                                <option value="directory">Directory Backup</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="schedule-time">Schedule Time:</label>
-                            <input type="datetime-local" id="schedule-time" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="schedule-source">Source Directory:</label>
-                            <input type="text" id="schedule-source" required>
-                        </div>
-                        <button type="submit" class="btn btn-success">Save Schedule</button>
-                        <button type="button" class="btn btn-danger" onclick="hideScheduleForm()">Cancel</button>
-                    </form>
+                <div id="backup-schedule" class="backup-schedule">
+                    <p class="no-data">No scheduled backups</p>
                 </div>
             </div>
             
             <div class="status-card">
                 <h2>Backup History</h2>
-                <div class="backup-history">
-                    <table id="backup-history">
-                        <thead>
-                            <tr>
-                                <th>Type</th>
-                                <th>Start Time</th>
-                                <th>End Time</th>
-                                <th>Status</th>
-                                <th>Size</th>
-                                <th>Files</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td colspan="6">No backup history available</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <div id="backup-history" class="backup-history">
+                    <p class="no-data">No backup history available</p>
                 </div>
             </div>
         </div>
@@ -569,7 +608,7 @@ DASHBOARD_TEMPLATE = """
                 document.getElementById('last-seen').textContent = formatDate(data.last_seen);
                 
                 updateCurrentBackup(data.current_backup);
-                updateScheduleInfo(data.next_scheduled);
+                updateBackupSchedule(data.next_scheduled);
                 updateBackupHistory(data.backup_history);
                 
                 currentClient = clientId;
@@ -582,59 +621,95 @@ DASHBOARD_TEMPLATE = """
             const element = document.getElementById('current-backup');
             
             if (!currentBackup) {
-                element.innerHTML = '<p>No backup in progress</p>';
+                element.innerHTML = '<p class="no-data">No backup in progress</p>';
                 return;
             }
             
+            let statusClass = '';
+            if (currentBackup.status === 'in_progress') {
+                statusClass = 'in-progress';
+            } else if (currentBackup.status === 'completed') {
+                statusClass = 'completed';
+            } else if (currentBackup.status === 'failed') {
+                statusClass = 'failed';
+            }
+            
             element.innerHTML = `
-                <p><strong>Type:</strong> ${currentBackup.type}</p>
+                <p><strong>Type:</strong> ${currentBackup.type || 'Unknown'}</p>
+                <p><strong>Status:</strong> <span class="status ${statusClass}">${currentBackup.status || 'Unknown'}</span></p>
+                <p><strong>Progress:</strong> ${currentBackup.progress || 0}%</p>
                 <p><strong>Start Time:</strong> ${formatDate(currentBackup.start_time)}</p>
-                <p><strong>Status:</strong> <span class="status-badge status-${currentBackup.status.toLowerCase()}">${currentBackup.status}</span></p>
-                <p><strong>Progress:</strong> ${currentBackup.progress}%</p>
-                <p><strong>ETA:</strong> ${currentBackup.eta}</p>
                 ${currentBackup.error ? `<p><strong>Error:</strong> ${currentBackup.error}</p>` : ''}
             `;
         }
         
-        function updateScheduleInfo(schedule) {
-            const element = document.getElementById('schedule-info');
+        function updateBackupSchedule(schedule) {
+            const element = document.getElementById('backup-schedule');
             
-            if (!schedule) {
-                element.innerHTML = '<p>No scheduled backups</p>';
+            if (!schedule || !schedule.next_scheduled) {
+                element.innerHTML = '<p class="no-data">No scheduled backups</p>';
                 return;
             }
             
             element.innerHTML = `
-                <p><strong>Type:</strong> ${schedule.type}</p>
-                <p><strong>Scheduled Time:</strong> ${formatDate(schedule.time)}</p>
-                <p><strong>Source:</strong> ${schedule.source}</p>
-                <p><strong>Destination:</strong> ${schedule.destination}</p>
+                <div class="schedule-item">
+                    <h4>Next Scheduled Backup</h4>
+                    <p><strong>Type:</strong> ${schedule.type || 'Unknown'}</p>
+                    <p><strong>Time:</strong> ${formatDate(schedule.next_scheduled)}</p>
+                    ${schedule.source_dir ? `<p><strong>Source Directory:</strong> ${schedule.source_dir}</p>` : ''}
+                </div>
             `;
         }
         
         function updateBackupHistory(history) {
-            const tbody = document.querySelector('#backup-history tbody');
-            tbody.innerHTML = '';
+            const element = document.getElementById('backup-history');
             
             if (!history || history.length === 0) {
-                const row = document.createElement('tr');
-                row.innerHTML = '<td colspan="6">No backup history available</td>';
-                tbody.appendChild(row);
+                element.innerHTML = '<p class="no-data">No backup history available</p>';
                 return;
             }
             
-            for (const backup of history) {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${backup.type}</td>
-                    <td>${formatDate(backup.start_time)}</td>
-                    <td>${formatDate(backup.end_time)}</td>
-                    <td><span class="status-badge status-${backup.status.toLowerCase()}">${backup.status}</span></td>
-                    <td>${formatBytes(backup.size)}</td>
-                    <td>${backup.files}</td>
+            let tableHtml = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Start Time</th>
+                            <th>End Time</th>
+                            <th>Size</th>
+                            <th>Files</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            history.forEach(backup => {
+                let statusClass = '';
+                if (backup.status === 'completed') {
+                    statusClass = 'completed';
+                } else if (backup.status === 'failed') {
+                    statusClass = 'failed';
+                }
+                
+                tableHtml += `
+                    <tr>
+                        <td>${backup.type || 'Unknown'}</td>
+                        <td><span class="status ${statusClass}">${backup.status || 'Unknown'}</span></td>
+                        <td>${formatDate(backup.start_time)}</td>
+                        <td>${formatDate(backup.end_time)}</td>
+                        <td>${formatBytes(backup.size || 0)}</td>
+                        <td>${backup.files || 0}</td>
+                    </tr>
                 `;
-                tbody.appendChild(row);
-            }
+            });
+            
+            tableHtml += `
+                    </tbody>
+                </table>
+            `;
+            
+            element.innerHTML = tableHtml;
         }
         
         function showScheduleForm() {
