@@ -1063,6 +1063,13 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             with open(clients_file, 'r') as f:
                 clients = json.load(f)
             
+            # Ensure clients is a dictionary
+            if not isinstance(clients, dict):
+                clients = {}
+                # Save empty dictionary if file was corrupted
+                with open(clients_file, 'w') as f:
+                    json.dump(clients, f, indent=2)
+            
             # Convert clients dict to list with id field
             clients_list = []
             for client_id, client_data in clients.items():
@@ -1071,6 +1078,7 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             
             self._send_json_response(clients_list)
         except Exception as e:
+            logger.error(f"Error getting clients: {str(e)}")
             self._send_error(500, str(e))
     
     def _handle_get_client(self, client_id):
@@ -1084,6 +1092,13 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             with open(clients_file, 'r') as f:
                 clients = json.load(f)
             
+            # Ensure clients is a dictionary
+            if not isinstance(clients, dict):
+                clients = {}
+                # Save empty dictionary if file was corrupted
+                with open(clients_file, 'w') as f:
+                    json.dump(clients, f, indent=2)
+            
             if client_id not in clients:
                 self._send_error(404, "Client not found")
                 return
@@ -1092,6 +1107,7 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             client_data['id'] = client_id
             self._send_json_response(client_data)
         except Exception as e:
+            logger.error(f"Error getting client {client_id}: {str(e)}")
             self._send_error(500, str(e))
 
     def _handle_add_client(self, data):
@@ -1122,11 +1138,18 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             clients_file = os.path.expanduser('~/Lin-Win-Backup/clients/clients.json')
             os.makedirs(os.path.dirname(clients_file), exist_ok=True)
             
+            clients = {}  # Default to empty dictionary
             if os.path.exists(clients_file):
-                with open(clients_file, 'r') as f:
-                    clients = json.load(f)
-            else:
-                clients = {}  # Initialize as dictionary, not list
+                try:
+                    with open(clients_file, 'r') as f:
+                        loaded_clients = json.load(f)
+                        # Ensure loaded data is a dictionary
+                        if isinstance(loaded_clients, dict):
+                            clients = loaded_clients
+                        else:
+                            logger.warning(f"Corrupted clients file found. Resetting to empty dictionary.")
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in clients file. Resetting to empty dictionary.")
             
             # Check if client already exists
             if client_id in clients:
@@ -1155,6 +1178,7 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             with open(temp_token_file, 'w') as f:
                 f.write(temp_token)
             
+            logger.info(f"Added new client: {client_id} ({ip})")
             return self._send_json_response({
                 'status': 'success',
                 'client_id': client_id,
@@ -1162,6 +1186,7 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
             })
             
         except Exception as e:
+            logger.error(f"Error adding client: {str(e)}")
             return self._send_json_response({'error': str(e)}, 500)
 
 def run_server(port=3000):
