@@ -1029,11 +1029,10 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._send_error(500, str(e))
     
-    def _send_json_response(self, data):
-        """Send JSON response"""
-        self.send_response(200)
+    def _send_json_response(self, data, status_code=200):
+        """Send JSON response with optional status code"""
+        self.send_response(status_code)
         self.send_header('Content-type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
     
@@ -1127,7 +1126,7 @@ class ServerAPIHandler(http.server.SimpleHTTPRequestHandler):
                 with open(clients_file, 'r') as f:
                     clients = json.load(f)
             else:
-                clients = {}
+                clients = {}  # Initialize as dictionary, not list
             
             # Check if client already exists
             if client_id in clients:
